@@ -1,6 +1,6 @@
 # Chat Web App — Toàn bộ Business Rules & Bài toán kỹ thuật
 
-## 1. Authentication
+## 1. Authentication  (ok)
 
 Rule
 
@@ -14,7 +14,7 @@ Logout chỉ xóa refresh token của thiết bị hiện tại, không xóa to�
 
 JWT hết hạn → Client dùng Refresh Token để lấy JWT mới.
 
-## 2. Session & Device Management
+## 2. Session & Device Management (ok)
 
 Lưu `device_id`, `device_name`, `last_active`, `ip`, `location(optional)`.
 
@@ -40,7 +40,7 @@ Privacy setting → cho phép ẩn Last Seen.
 
 Nếu bị block → không thấy online status của nhau.
 
-## 5. Friend
+## 5. Friend (ok)
 
 Không gửi request cho chính mình.
 
@@ -184,13 +184,13 @@ Muted conversation → không push. Bị block → không push.
 
 Mention vẫn ưu tiên push kể cả khi mute (tùy business).
 
-## 26. Message Ordering
+## 26. Message Ordering (ok)
 
 Client gửi 1,2,3 nhưng server nhận 2,1,3 (do network) → hiển thị sao?
 
-Rule: sắp xếp theo `created_at_server`, hoặc kết hợp `client_message_id` + `server_timestamp` để đồng bộ đúng thứ tự khi reconnect.
+Rule: sắp xếp theo 'sequence' được thêm vào bảng message bản sau này.
 
-## 27. Message Pagination & History Loading
+## 27. Message Pagination & History Loading (ok)
 
 Không load toàn bộ lịch sử cùng lúc.
 
@@ -198,7 +198,7 @@ Dùng cursor-based pagination (theo `message_id`/`created_at`), tránh OFFSET v�
 
 Load thêm khi scroll lên đầu danh sách (infinite scroll ngược).
 
-## 28. Unread Count
+## 28. Unread Count (ok)
 
 1000 message → COUNT(*) mỗi lần là rất chậm.
 

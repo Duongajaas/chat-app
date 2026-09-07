@@ -385,6 +385,12 @@ namespace ChatApp.Migrations
                         .HasColumnType("text")
                         .HasColumnName("nickname");
 
+                    b.Property<int>("RequestStatus")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1)
+                        .HasColumnName("request_status");
+
                     b.Property<int>("Role")
                         .HasColumnType("integer")
                         .HasColumnName("role");
@@ -454,6 +460,62 @@ namespace ChatApp.Migrations
                         .HasDatabaseName("ix_direct_conversations_user_low_id_user_high_id");
 
                     b.ToTable("direct_conversations", (string)null);
+                });
+
+            modelBuilder.Entity("ChatApp.Models.FriendLink", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<int?>("MaxUses")
+                        .HasColumnType("integer")
+                        .HasColumnName("max_uses");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<string>("Token")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("token");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("token_hash");
+
+                    b.Property<int>("UsedCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("used_count");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_friend_links");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("ix_friend_links_token_hash");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("ix_friend_links_user_id");
+
+                    b.ToTable("friend_links", (string)null);
                 });
 
             modelBuilder.Entity("ChatApp.Models.FriendRequest", b =>
@@ -579,6 +641,13 @@ namespace ChatApp.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("sender_id");
 
+                    b.Property<long>("Sequence")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("sequence");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityAlwaysColumn(b.Property<long>("Sequence"));
+
                     b.Property<int>("Status")
                         .HasColumnType("integer")
                         .HasColumnName("status");
@@ -602,12 +671,12 @@ namespace ChatApp.Migrations
                     b.HasIndex("SenderId")
                         .HasDatabaseName("ix_messages_sender_id");
 
-                    b.HasIndex("ConversationId", "ClientMessageId")
-                        .IsUnique()
-                        .HasDatabaseName("ix_messages_conversation_id_client_message_id");
+                    b.HasIndex("ConversationId", "Sequence")
+                        .HasDatabaseName("ix_messages_conversation_id_sequence");
 
-                    b.HasIndex("ConversationId", "CreatedAt")
-                        .HasDatabaseName("ix_messages_conversation_id_created_at");
+                    b.HasIndex("SenderId", "ClientMessageId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_messages_sender_id_client_message_id");
 
                     b.ToTable("messages", (string)null);
                 });
@@ -639,11 +708,6 @@ namespace ChatApp.Migrations
                         .HasColumnType("text")
                         .HasColumnName("file_type");
 
-                    b.Property<string>("FileUrl")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("file_url");
-
                     b.Property<int?>("Height")
                         .HasColumnType("integer")
                         .HasColumnName("height");
@@ -656,9 +720,14 @@ namespace ChatApp.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("metadata");
 
-                    b.Property<string>("ThumbnailUrl")
+                    b.Property<string>("StorageKey")
+                        .IsRequired()
                         .HasColumnType("text")
-                        .HasColumnName("thumbnail_url");
+                        .HasColumnName("storage_key");
+
+                    b.Property<string>("ThumbnailKey")
+                        .HasColumnType("text")
+                        .HasColumnName("thumbnail_key");
 
                     b.Property<int?>("Width")
                         .HasColumnType("integer")
@@ -860,6 +929,11 @@ namespace ChatApp.Migrations
                         .HasColumnType("text")
                         .HasColumnName("body");
 
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("channel");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -872,9 +946,29 @@ namespace ChatApp.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("is_read");
 
+                    b.Property<DateTime?>("LastAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_attempt_at");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text")
+                        .HasColumnName("last_error");
+
                     b.Property<DateTime?>("ReadAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("read_at");
+
+                    b.Property<int>("RetryCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("retry_count");
+
+                    b.Property<DateTime?>("SentAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sent_at");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer")
+                        .HasColumnName("status");
 
                     b.Property<string>("Title")
                         .HasColumnType("text")
@@ -992,13 +1086,29 @@ namespace ChatApp.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<Guid?>("DeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("device_id");
+
                     b.Property<DateTime>("ExpiresAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("expires_at");
 
+                    b.Property<Guid>("FamilyId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("family_id");
+
                     b.Property<string>("IpAddress")
                         .HasColumnType("text")
                         .HasColumnName("ip_address");
+
+                    b.Property<Guid?>("ReplacedByTokenId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("replaced_by_token_id");
+
+                    b.Property<string>("RevocationReason")
+                        .HasColumnType("text")
+                        .HasColumnName("revocation_reason");
 
                     b.Property<DateTime?>("RevokedAt")
                         .HasColumnType("timestamp with time zone")
@@ -1008,6 +1118,10 @@ namespace ChatApp.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("token_hash");
+
+                    b.Property<DateTime?>("UsedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("used_at");
 
                     b.Property<string>("UserAgent")
                         .HasColumnType("text")
@@ -1020,12 +1134,21 @@ namespace ChatApp.Migrations
                     b.HasKey("Id")
                         .HasName("pk_refresh_tokens");
 
+                    b.HasIndex("DeviceId")
+                        .HasDatabaseName("ix_refresh_tokens_device_id");
+
+                    b.HasIndex("ExpiresAt")
+                        .HasDatabaseName("ix_refresh_tokens_expires_at");
+
                     b.HasIndex("TokenHash")
                         .IsUnique()
                         .HasDatabaseName("ix_refresh_tokens_token_hash");
 
                     b.HasIndex("UserId")
                         .HasDatabaseName("ix_refresh_tokens_user_id");
+
+                    b.HasIndex("UserId", "FamilyId")
+                        .HasDatabaseName("ix_refresh_tokens_user_id_family_id");
 
                     b.ToTable("refresh_tokens", (string)null);
                 });
@@ -1287,12 +1410,12 @@ namespace ChatApp.Migrations
                     b.HasKey("Id")
                         .HasName("pk_user_devices");
 
-                    b.HasIndex("DeviceToken")
-                        .IsUnique()
-                        .HasDatabaseName("ix_user_devices_device_token");
-
                     b.HasIndex("UserId")
                         .HasDatabaseName("ix_user_devices_user_id");
+
+                    b.HasIndex("UserId", "DeviceToken")
+                        .IsUnique()
+                        .HasDatabaseName("ix_user_devices_user_id_device_token");
 
                     b.ToTable("user_devices", (string)null);
                 });
@@ -1442,6 +1565,16 @@ namespace ChatApp.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_direct_conversations_users_user_low_id");
+                });
+
+            modelBuilder.Entity("ChatApp.Models.FriendLink", b =>
+                {
+                    b.HasOne("ChatApp.Models.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_friend_links_users_user_id");
                 });
 
             modelBuilder.Entity("ChatApp.Models.FriendRequest", b =>
@@ -1655,12 +1788,20 @@ namespace ChatApp.Migrations
 
             modelBuilder.Entity("ChatApp.Models.RefreshToken", b =>
                 {
+                    b.HasOne("ChatApp.Models.UserDevice", "Device")
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_refresh_tokens_user_devices_device_id");
+
                     b.HasOne("ChatApp.Models.User", "User")
                         .WithMany("RefreshTokens")
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_refresh_tokens_users_user_id");
+
+                    b.Navigation("Device");
 
                     b.Navigation("User");
                 });
