@@ -2,17 +2,29 @@ using System.Text;
 using System.Threading.RateLimiting;
 using ChatApp.Common;
 using ChatApp.Data;
+using ChatApp.Hubs;
 using ChatApp.Options;
+using ChatApp.Presence;
 using ChatApp.Services;
+using MediatR;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
-var envFilePath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
-if (File.Exists(envFilePath))
+var envFilePaths = new[]
 {
-    DotNetEnv.Env.Load(envFilePath);
+    Path.Combine(Directory.GetCurrentDirectory(), ".env"),
+    Path.Combine(Directory.GetCurrentDirectory(), "ChatApp", ".env")
+};
+
+foreach (var envFilePath in envFilePaths.Distinct())
+{
+    if (File.Exists(envFilePath))
+    {
+        DotNetEnv.Env.Load(envFilePath);
+        break;
+    }
 }
 
 var builder = WebApplication.CreateBuilder(args);
@@ -40,6 +52,16 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IGoogleAuthService, GoogleAuthService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddScoped<IConversationService, ConversationService>();
+builder.Services.AddScoped<IMessageService, MessageService>();
+builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<IFriendLinkService, FriendLinkService>();
+builder.Services.AddScoped<IFriendService, FriendService>();
+builder.Services.AddScoped<IBlockService, BlockService>();
+builder.Services.AddSingleton<IPresenceTracker, InMemoryPresenceTracker>();
+
+builder.Services.AddSignalR();
+builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(Program).Assembly));
 
 // ---------- CORS ----------
 // Cho phép frontend (Vite dev server) gọi API kèm cookie/credentials nếu cần.
@@ -60,7 +82,10 @@ builder.Services.AddCors(options =>
 });
 
 // ---------- Controllers / Swagger ----------
-builder.Services.AddControllers();
+builder.Services.AddControllers().AddJsonOptions(options =>
+{
+        options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -111,6 +136,23 @@ builder.Services.AddAuthentication(options =>
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
         ClockSkew = TimeSpan.FromSeconds(30)
     };
+
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Query["access_token"];
+            var path = context.HttpContext.Request.Path;
+
+            if (!string.IsNullOrEmpty(accessToken) &&
+                path.StartsWithSegments("/hubs/chat"))
+            {
+                context.Token = accessToken;
+            }
+
+            return Task.CompletedTask;
+        }
+    };
 });
 
 // ---------- Authorization ----------
@@ -153,6 +195,14 @@ builder.Services.AddRateLimiter(options =>
             QueueLimit = 0
         }));
 
+    options.AddPolicy(RateLimitPolicies.RefreshToken, httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(PartitionKey(httpContext), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = rateLimitOptions.RefreshToken.PermitLimit,
+            Window = TimeSpan.FromSeconds(rateLimitOptions.RefreshToken.WindowSeconds),
+            QueueLimit = 0
+        }));
+
     options.AddPolicy(RateLimitPolicies.ForgotPassword, httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(PartitionKey(httpContext), _ => new FixedWindowRateLimiterOptions
         {
@@ -161,11 +211,35 @@ builder.Services.AddRateLimiter(options =>
             QueueLimit = 0
         }));
 
+    options.AddPolicy(RateLimitPolicies.ResetPassword, httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(PartitionKey(httpContext), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = rateLimitOptions.ResetPassword.PermitLimit,
+            Window = TimeSpan.FromSeconds(rateLimitOptions.ResetPassword.WindowSeconds),
+            QueueLimit = 0
+        }));
+
     options.AddPolicy(RateLimitPolicies.GoogleLogin, httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(PartitionKey(httpContext), _ => new FixedWindowRateLimiterOptions
         {
             PermitLimit = rateLimitOptions.GoogleLogin.PermitLimit,
             Window = TimeSpan.FromSeconds(rateLimitOptions.GoogleLogin.WindowSeconds),
+            QueueLimit = 0
+        }));
+
+    options.AddPolicy(RateLimitPolicies.ResolveFriendLink, httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(PartitionKey(httpContext), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = rateLimitOptions.ResolveFriendLink.PermitLimit,
+            Window = TimeSpan.FromSeconds(rateLimitOptions.ResolveFriendLink.WindowSeconds),
+            QueueLimit = 0
+        }));
+
+    options.AddPolicy(RateLimitPolicies.GetMessages, httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(PartitionKey(httpContext), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = rateLimitOptions.GetMessages.PermitLimit,
+            Window = TimeSpan.FromSeconds(rateLimitOptions.GetMessages.WindowSeconds),
             QueueLimit = 0
         }));
 });
@@ -201,6 +275,30 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    context.Response.Headers["X-Frame-Options"] = "DENY";
+    context.Response.Headers["Referrer-Policy"] =
+        "strict-origin-when-cross-origin";
+
+    context.Response.Headers["Permissions-Policy"] =
+        "geolocation=(), microphone=(self), camera=(self)";
+
+    context.Response.Headers["Content-Security-Policy"] =
+        "default-src 'self'; " +
+        "object-src 'none'; " +
+        "frame-ancestors 'none'; " +
+        "base-uri 'self';";
+
+    await next();
+});
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+}
+
 app.UseCors("FrontendPolicy");
 
 app.UseRateLimiter();
@@ -209,5 +307,6 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<ChatHub>("/hubs/chat");
 
 app.Run();

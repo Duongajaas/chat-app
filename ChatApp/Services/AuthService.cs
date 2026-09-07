@@ -30,7 +30,7 @@ public class AuthService : IAuthService
         _lockoutOptions = lockoutOptions.Value;
     }
 
-    public async Task<AuthResponse> RegisterAsync(RegisterRequest request, string? ipAddress, string? userAgent)
+    public async Task<AuthResult> RegisterAsync(RegisterRequest request, string? ipAddress, string? userAgent)
     {
         var username = request.Username.Trim().ToLowerInvariant();
         var email = request.Email.Trim().ToLowerInvariant();
@@ -51,10 +51,12 @@ public class AuthService : IAuthService
         _db.Users.Add(user);
         await _db.SaveChangesAsync();
 
-        return await IssueTokensAsync(user, ipAddress, userAgent);
+        var deviceId = await UpsertDeviceAsync(user, request.Device);
+
+        return await IssueTokensAsync(user, ipAddress, userAgent, deviceId);
     }
 
-    public async Task<AuthResponse> LoginAsync(LoginRequest request, string? ipAddress, string? userAgent)
+    public async Task<AuthResult> LoginAsync(LoginRequest request, string? ipAddress, string? userAgent)
     {
         var username = request.Username.Trim().ToLowerInvariant();
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Username == username && u.DeletedAt == null);
@@ -95,10 +97,12 @@ public class AuthService : IAuthService
         user.LastSeenAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
-        return await IssueTokensAsync(user, ipAddress, userAgent);
+        var deviceId = await UpsertDeviceAsync(user, request.Device);
+
+        return await IssueTokensAsync(user, ipAddress, userAgent, deviceId);
     }
 
-    public async Task<AuthResponse> GoogleLoginAsync(GoogleLoginRequest request, string? ipAddress, string? userAgent)
+    public async Task<AuthResult> GoogleLoginAsync(GoogleLoginRequest request, string? ipAddress, string? userAgent)
     {
         var payload = await _googleAuthService.VerifyIdTokenAsync(request.IdToken);
 
@@ -136,30 +140,78 @@ public class AuthService : IAuthService
         user.LastSeenAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
-        return await IssueTokensAsync(user, ipAddress, userAgent);
+        var deviceId = await UpsertDeviceAsync(user, request.Device);
+
+        return await IssueTokensAsync(user, ipAddress, userAgent, deviceId);
     }
 
-    public async Task<AuthResponse> RefreshTokenAsync(string rawRefreshToken, string? ipAddress, string? userAgent)
+    public async Task<AuthResult> RefreshTokenAsync(string rawRefreshToken, string? ipAddress, string? userAgent)
     {
         var tokenHash = _tokenService.HashToken(rawRefreshToken);
+        var now = DateTime.UtcNow;
 
         var existingToken = await _db.RefreshTokens
             .Include(rt => rt.User)
             .FirstOrDefaultAsync(rt => rt.TokenHash == tokenHash);
 
-        if (existingToken is null || !existingToken.IsActive)
+        if (existingToken is null)
+            throw AppException.Unauthorized("Refresh token không hợp lệ hoặc đã hết hạn.");
+
+        if (existingToken.UsedAt is not null)
+        {
+            await RevokeFamilyAsync(existingToken.FamilyId, "refresh-token-reuse");
+            throw AppException.Unauthorized("Phiên đăng nhập không còn hợp lệ. Vui lòng đăng nhập lại.");
+        }
+
+        if (existingToken.RevokedAt is not null || existingToken.ExpiresAt <= now)
             throw AppException.Unauthorized("Refresh token không hợp lệ hoặc đã hết hạn.");
 
         if (!existingToken.User.IsActive)
             throw AppException.Forbidden("Tài khoản đã bị vô hiệu hóa.");
 
-        // Rotate: thu hồi token cũ, phát hành token mới — giảm rủi ro nếu token bị lộ
-        existingToken.RevokedAt = DateTime.UtcNow;
+        await using var transaction = await _db.Database.BeginTransactionAsync();
 
-        var response = await IssueTokensAsync(existingToken.User, ipAddress, userAgent);
+        var accessToken = _tokenService.GenerateAccessToken(existingToken.User);
+        var refreshToken = _tokenService.GenerateRefreshToken();
+        var newRefreshToken = new RefreshToken
+        {
+            UserId = existingToken.UserId,
+            DeviceId = existingToken.DeviceId,
+            FamilyId = existingToken.FamilyId,
+            TokenHash = refreshToken.TokenHash,
+            ExpiresAt = refreshToken.ExpiresAt,
+            IpAddress = ipAddress,
+            UserAgent = userAgent
+        };
+
+        var consumedRows = await _db.RefreshTokens
+            .Where(rt =>
+                rt.Id == existingToken.Id &&
+                rt.UsedAt == null &&
+                rt.RevokedAt == null &&
+                rt.ExpiresAt > now)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(rt => rt.UsedAt, (DateTime?)now)
+                .SetProperty(rt => rt.ReplacedByTokenId, (Guid?)newRefreshToken.Id));
+
+        if (consumedRows != 1)
+        {
+            await transaction.RollbackAsync();
+            await RevokeFamilyAsync(existingToken.FamilyId, "refresh-token-concurrent-consume");
+            throw AppException.Unauthorized("Phiên đăng nhập không còn hợp lệ. Vui lòng đăng nhập lại.");
+        }
+
+        _db.RefreshTokens.Add(newRefreshToken);
         await _db.SaveChangesAsync();
+        await transaction.CommitAsync();
 
-        return response;
+        return new AuthResult(
+            AccessToken: accessToken.Token,
+            AccessTokenExpiresAt: accessToken.ExpiresAt,
+            RefreshToken: refreshToken.RawToken,
+            RefreshTokenExpiresAt: refreshToken.ExpiresAt,
+            User: ToUserResponse(existingToken.User)
+        );
     }
 
     public async Task LogoutAsync(string rawRefreshToken)
@@ -171,6 +223,7 @@ public class AuthService : IAuthService
         if (token is not null && token.RevokedAt is null)
         {
             token.RevokedAt = DateTime.UtcNow;
+            token.RevocationReason = "logout";
             await _db.SaveChangesAsync();
         }
     }
@@ -219,34 +272,55 @@ public class AuthService : IAuthService
             .ToListAsync();
 
         foreach (var rt in activeTokens)
+        {
             rt.RevokedAt = DateTime.UtcNow;
+            rt.RevocationReason = "password-reset";
+        }
 
         await _db.SaveChangesAsync();
     }
 
-    private async Task<AuthResponse> IssueTokensAsync(User user, string? ipAddress, string? userAgent)
+    private async Task<AuthResult> IssueTokensAsync(User user, string? ipAddress, string? userAgent, Guid? deviceId = null)
     {
         var accessToken = _tokenService.GenerateAccessToken(user);
         var refreshToken = _tokenService.GenerateRefreshToken();
+        var familyId = Guid.NewGuid();
 
         _db.RefreshTokens.Add(new RefreshToken
         {
             UserId = user.Id,
+            FamilyId = familyId,
             TokenHash = refreshToken.TokenHash,
             ExpiresAt = refreshToken.ExpiresAt,
             IpAddress = ipAddress,
-            UserAgent = userAgent
+            UserAgent = userAgent,
+            DeviceId = deviceId
         });
 
         await _db.SaveChangesAsync();
 
-        return new AuthResponse(
+        return new AuthResult(
             AccessToken: accessToken.Token,
-            RefreshToken: refreshToken.RawToken,
             AccessTokenExpiresAt: accessToken.ExpiresAt,
-            User: new UserResponse(user.Id, user.Username, user.Email, user.Phone, user.FullName, user.AvatarUrl, user.Bio, user.IsVerified)
+            RefreshToken: refreshToken.RawToken,
+            RefreshTokenExpiresAt: refreshToken.ExpiresAt,
+            User: ToUserResponse(user)
         );
     }
+
+    private async Task RevokeFamilyAsync(Guid familyId, string reason)
+    {
+        var now = DateTime.UtcNow;
+
+        await _db.RefreshTokens
+            .Where(rt => rt.FamilyId == familyId && rt.RevokedAt == null)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(rt => rt.RevokedAt, (DateTime?)now)
+                .SetProperty(rt => rt.RevocationReason, (string?)reason));
+    }
+
+    private static UserResponse ToUserResponse(User user) =>
+        new(user.Id, user.Username, user.Email, user.Phone, user.FullName, user.AvatarUrl, user.Bio, user.IsVerified);
 
     private async Task<string> GenerateUniqueUsernameAsync(string email)
     {
@@ -261,5 +335,96 @@ public class AuthService : IAuthService
         }
 
         return candidate;
+    }
+
+    private async Task<Guid?> UpsertDeviceAsync(User user, DeviceInfo? deviceInfo)
+    {
+        if (deviceInfo is null || string.IsNullOrWhiteSpace(deviceInfo.DeviceToken)) return null;
+
+        var existingDevice = await _db.UserDevices.FirstOrDefaultAsync(d =>
+            d.UserId == user.Id && d.DeviceToken == deviceInfo.DeviceToken);
+
+        if (existingDevice is not null)
+        {
+            existingDevice.DeviceName = deviceInfo.DeviceName ?? existingDevice.DeviceName;
+            existingDevice.Platform = deviceInfo.Platform;
+            existingDevice.LastActiveAt = DateTime.UtcNow;
+            existingDevice.IsActive = true;
+
+            return existingDevice.Id;
+        }
+        var newDevice = new UserDevice
+        {
+            UserId = user.Id,
+            DeviceToken = deviceInfo.DeviceToken,
+            DeviceName = deviceInfo.DeviceName,
+            Platform = deviceInfo.Platform,
+            LastActiveAt = DateTime.UtcNow
+        };
+
+        try
+        {
+            _db.UserDevices.Add(newDevice);
+            await _db.SaveChangesAsync();
+            return newDevice.Id;
+        }
+        catch (DbUpdateException)
+        {
+            _db.ChangeTracker.Clear();
+            var winnerDevice = await _db.UserDevices.FirstOrDefaultAsync(d =>
+                d.UserId == user.Id && d.DeviceToken == deviceInfo.DeviceToken);
+
+            if (winnerDevice is null)
+                throw;
+
+            winnerDevice.DeviceName = deviceInfo.DeviceName ?? winnerDevice.DeviceName;
+            winnerDevice.Platform = deviceInfo.Platform;
+            winnerDevice.LastActiveAt = DateTime.UtcNow;
+            winnerDevice.IsActive = true;
+            await _db.SaveChangesAsync();
+            return winnerDevice.Id;
+        }
+    }
+
+    public async Task<List<DeviceResponse>> GetDevicesAsync(Guid userId)
+    {
+        var devices = await _db.UserDevices
+            .Where(d => d.UserId == userId)
+            .OrderByDescending(d => d.LastActiveAt)
+            .Select(d => new DeviceResponse(
+                Id: d.Id,
+                DeviceName: d.DeviceName,
+                Platform: d.Platform,
+                LastActiveAt: d.LastActiveAt
+            ))
+            .ToListAsync();
+
+        return devices;
+    }
+
+    public async Task RevokeDeviceAsync(Guid userId, Guid deviceId)
+    {
+        var device = await _db.UserDevices.FirstOrDefaultAsync(d => d.Id == deviceId && d.UserId == userId);
+        if (device is null)
+            throw AppException.NotFound("Thiết bị không tồn tại.");
+
+        // Thu hồi tất cả refresh token liên quan đến thiết bị này
+        var tokensToRevoke = await _db.RefreshTokens
+            .Where(rt => rt.UserId == userId && rt.DeviceId == deviceId && rt.RevokedAt == null)
+            .ToListAsync();
+
+        foreach (var token in tokensToRevoke)
+        {
+            token.RevokedAt = DateTime.UtcNow;
+            token.RevocationReason = "device-revoked";
+        }
+
+        device.IsActive = false;
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task<User?> GetUserByIdAsync(Guid userId)
+    {
+        return await _db.Users.FirstOrDefaultAsync(u => u.Id == userId && u.DeletedAt == null);
     }
 }

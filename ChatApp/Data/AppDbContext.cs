@@ -15,6 +15,7 @@ public class AppDbContext : DbContext
     public DbSet<FriendRequest> FriendRequests => Set<FriendRequest>();
     public DbSet<Friendship> Friendships => Set<Friendship>();
     public DbSet<Block> Blocks => Set<Block>();
+    public DbSet<FriendLink> FriendLinks => Set<FriendLink>();
 
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<DirectConversation> DirectConversations => Set<DirectConversation>();
@@ -58,9 +59,13 @@ public class AppDbContext : DbContext
         {
             e.ToTable("refresh_tokens");
             e.HasIndex(x => x.UserId);
+            e.HasIndex(x => new { x.UserId, x.FamilyId });
+            e.HasIndex(x => x.ExpiresAt);
             e.HasIndex(x => x.TokenHash).IsUnique();
             e.HasOne(x => x.User).WithMany(u => u.RefreshTokens)
                 .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Device).WithMany()
+                .HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<PasswordResetToken>(e =>
@@ -76,7 +81,7 @@ public class AppDbContext : DbContext
         {
             e.ToTable("user_devices");
             e.HasIndex(x => x.UserId);
-            e.HasIndex(x => x.DeviceToken).IsUnique();
+            e.HasIndex(x => new { x.UserId, x.DeviceToken }).IsUnique();
             e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -110,6 +115,16 @@ public class AppDbContext : DbContext
             e.ToTable(t => t.HasCheckConstraint("ck_blocks_no_self", "blocker_id <> blocked_id"));
         });
 
+        modelBuilder.Entity<FriendLink>(e =>
+        {
+            e.ToTable("friend_links");
+            e.HasIndex(x => x.UserId);
+            e.HasIndex(x => x.TokenHash).IsUnique();
+            e.Property(x => x.Token).HasMaxLength(64);
+            e.Property(x => x.TokenHash).HasMaxLength(128);
+            e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         // ---------- Conversation ----------
         modelBuilder.Entity<Conversation>(e =>
         {
@@ -137,6 +152,7 @@ public class AppDbContext : DbContext
             e.HasIndex(x => new { x.ConversationId, x.UserId }).IsUnique();
             e.HasIndex(x => x.UserId);
             e.HasIndex(x => x.ConversationId);
+            e.Property(x => x.RequestStatus).HasDefaultValue(MemberRequestStatus.Accepted);
             e.HasOne<Conversation>().WithMany().HasForeignKey(x => x.ConversationId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne<Message>().WithMany().HasForeignKey(x => x.LastReadMessageId).OnDelete(DeleteBehavior.SetNull);
@@ -155,8 +171,9 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Message>(e =>
         {
             e.ToTable("messages");
-            e.HasIndex(x => new { x.ConversationId, x.ClientMessageId }).IsUnique();
-            e.HasIndex(x => new { x.ConversationId, x.CreatedAt });
+            e.Property(x => x.Sequence).UseIdentityAlwaysColumn();
+            e.HasIndex(x => new { x.SenderId, x.ClientMessageId }).IsUnique();
+            e.HasIndex(x => new { x.ConversationId, x.Sequence });
             e.HasIndex(x => x.SenderId);
             e.HasIndex(x => x.DeletedAt);
             e.HasOne<Conversation>().WithMany().HasForeignKey(x => x.ConversationId).OnDelete(DeleteBehavior.Cascade);

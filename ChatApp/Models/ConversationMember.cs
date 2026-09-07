@@ -7,6 +7,7 @@ public class ConversationMember
     public Guid UserId { get; set; }
 
     public MemberRole Role { get; set; } = MemberRole.Member;
+    public MemberRequestStatus RequestStatus { get; set; } = MemberRequestStatus.Accepted;
     public string? Nickname { get; set; }
 
     public DateTime JoinedAt { get; set; } = DateTime.UtcNow;

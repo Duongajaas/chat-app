@@ -27,6 +27,10 @@ public class RateLimitingOptions
 
     public RateLimitRule Login { get; set; } = new();
     public RateLimitRule Register { get; set; } = new();
+    public RateLimitRule RefreshToken { get; set; } = new() { PermitLimit = 20, WindowSeconds = 60 };
     public RateLimitRule ForgotPassword { get; set; } = new();
+    public RateLimitRule ResetPassword { get; set; } = new() { PermitLimit = 5, WindowSeconds = 300 };
     public RateLimitRule GoogleLogin { get; set; } = new();
+    public RateLimitRule ResolveFriendLink { get; set; } = new() { PermitLimit = 20, WindowSeconds = 60 };
+    public RateLimitRule GetMessages { get; set; } = new() { PermitLimit = 60, WindowSeconds = 60 };
 }

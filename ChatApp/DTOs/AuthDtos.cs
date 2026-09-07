@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using ChatApp.Models;
 
 namespace ChatApp.DTOs;
 
@@ -6,24 +7,25 @@ public record RegisterRequest(
     [Required, MinLength(3), MaxLength(50)] string Username,
     [Required, EmailAddress] string Email,
     [Required, MinLength(8)] string Password,
-    [Required, MaxLength(100)] string FullName
+    [Required, MaxLength(100)] string FullName,
+    DeviceInfo? Device = null
+);
+
+public record DeviceInfo(
+    [Required] string DeviceToken,
+    string? DeviceName,
+    DevicePlatform Platform
 );
 
 public record LoginRequest(
     [Required] string Username,
-    [Required] string Password
+    [Required] string Password,
+    DeviceInfo? Device = null
 );
 
 public record GoogleLoginRequest(
-    [Required] string IdToken
-);
-
-public record RefreshTokenRequest(
-    [Required] string RefreshToken
-);
-
-public record LogoutRequest(
-    [Required] string RefreshToken
+    [Required] string IdToken,
+    DeviceInfo? Device = null
 );
 
 public record ForgotPasswordRequest(
@@ -48,7 +50,21 @@ public record UserResponse(
 
 public record AuthResponse(
     string AccessToken,
-    string RefreshToken,
     DateTime AccessTokenExpiresAt,
     UserResponse User
+);
+
+public record AuthResult(
+    string AccessToken,
+    DateTime AccessTokenExpiresAt,
+    string RefreshToken,
+    DateTime RefreshTokenExpiresAt,
+    UserResponse User
+);
+
+public record DeviceResponse(
+    Guid Id,
+    string? DeviceName,
+    DevicePlatform Platform,
+    DateTime? LastActiveAt
 );

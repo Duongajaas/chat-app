@@ -6,9 +6,11 @@ public class Message
     public Guid ConversationId { get; set; }
     public Guid? SenderId { get; set; }
 
-    // Do client sinh (UUID) khi gửi; unique theo conversation để chống insert trùng
-    // lúc client retry do mất mạng/timeout.
+    // client_message_id là UUID do client sinh; unique theo sender để chống retry lặp
+    // dù cùng tin có thể được gửi vào 2 conversation khác nhau.
     public Guid ClientMessageId { get; set; }
+
+    public long Sequence { get; set; }
 
     public MessageType Type { get; set; } = MessageType.Text;
     public string? Content { get; set; }

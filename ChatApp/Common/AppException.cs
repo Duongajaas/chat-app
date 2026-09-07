@@ -1,9 +1,5 @@
 namespace ChatApp.Common;
 
-/// <summary>
-/// Exception nghiệp vụ có kèm HTTP status code, để controller map thẳng ra response
-/// mà không cần if/else rải rác.
-/// </summary>
 public class AppException : Exception
 {
     public int StatusCode { get; }

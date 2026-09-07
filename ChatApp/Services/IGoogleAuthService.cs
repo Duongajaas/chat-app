@@ -1,6 +1,8 @@
 using ChatApp.Common;
 using ChatApp.Options;
 using Google.Apis.Auth;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace ChatApp.Services;
@@ -15,22 +17,35 @@ public interface IGoogleAuthService
 public class GoogleAuthService : IGoogleAuthService
 {
     private readonly GoogleAuthOptions _options;
+    private readonly IHostEnvironment _environment;
+    private readonly ILogger<GoogleAuthService> _logger;
 
-    public GoogleAuthService(IOptions<GoogleAuthOptions> options)
+    public GoogleAuthService(
+        IOptions<GoogleAuthOptions> options,
+        IHostEnvironment environment,
+        ILogger<GoogleAuthService> logger)
     {
         _options = options.Value;
+        _environment = environment;
+        _logger = logger;
     }
 
     public async Task<GooglePayload> VerifyIdTokenAsync(string idToken)
     {
+        var clientId = _options.ClientId?.Trim();
+        var token = idToken.Trim();
+
+        if (string.IsNullOrWhiteSpace(clientId))
+            throw AppException.BadRequest("Google ClientId chưa được cấu hình trên backend.");
+
         try
         {
             var settings = new GoogleJsonWebSignature.ValidationSettings
             {
-                Audience = new[] { _options.ClientId }
+                Audience = new[] { clientId }
             };
 
-            var payload = await GoogleJsonWebSignature.ValidateAsync(idToken, settings);
+            var payload = await GoogleJsonWebSignature.ValidateAsync(token, settings);
 
             return new GooglePayload(
                 GoogleId: payload.Subject,
@@ -40,9 +55,15 @@ public class GoogleAuthService : IGoogleAuthService
                 EmailVerified: payload.EmailVerified
             );
         }
-        catch (InvalidJwtException)
+        catch (InvalidJwtException ex)
         {
-            throw AppException.Unauthorized("Google ID token không hợp lệ hoặc đã hết hạn.");
+            _logger.LogWarning(ex, "Google ID token validation failed.");
+
+            var message = _environment.IsDevelopment()
+                ? $"Google ID token không hợp lệ hoặc đã hết hạn. Chi tiết: {ex.Message}"
+                : "Google ID token không hợp lệ hoặc đã hết hạn.";
+
+            throw AppException.Unauthorized(message);
         }
     }
 }

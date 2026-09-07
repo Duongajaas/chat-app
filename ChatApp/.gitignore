@@ -5,3 +5,4 @@ appsettings.Development.json
 .env
 .vs/
 .vscode/
+Migrations/
