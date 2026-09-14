@@ -1,0 +1,10 @@
+import { defineConfig } from "@playwright/test";
+export default defineConfig({
+  testDir: "./e2e", workers: 1, timeout: 30000,
+  use: { baseURL: "http://127.0.0.1:4173", headless: true },
+  webServer: {
+    command: "npm run dev -- --host 127.0.0.1 --port 4173 --strictPort",
+    url: "http://127.0.0.1:4173", reuseExistingServer: false,
+    env: { VITE_API_BASE_URL: "/api", VITE_SIGNALR_HUB_URL: "/hubs/chat", VITE_GOOGLE_CLIENT_ID: "" },
+  },
+});

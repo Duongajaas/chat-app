@@ -22,8 +22,9 @@ export function mergeMessages(existing: ChatMessage[], incoming: ChatMessage[]):
     if (m.clientMessageId && map.has(m.clientMessageId)) {
       map.delete(m.clientMessageId);
     }
-    // Ghi đè/thêm mới theo id THẬT
-    map.set(m.id, m);
+    // A delayed send ACK must not undo a recall.
+    const previous = map.get(m.id);
+    map.set(m.id, previous?.status === "Deleted" ? previous : m);
   }
 
   // Bước 3: sort lại theo sequence

@@ -31,19 +31,20 @@ public class MessagesController : ControllerBase
         if (!Guid.TryParse(rawUserId, out var userId))
             return Unauthorized();
 
-        return Ok(await _messageService.GetMessagesAsync(userId, conversationId, before, after, limit));
+        return Ok(await _messageService.GetMessagesAsync(userId, conversationId, before, after, limit, HttpContext.RequestAborted));
     }
 
     [HttpPost("api/conversations/{conversationId:guid}/messages")]
+    [EnableRateLimiting("chat-write")]
     public async Task<ActionResult<MessageResponse>> Send(Guid conversationId, [FromBody] SendMessagePayload payload)
     {
         var rawUserId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
         if (!Guid.TryParse(rawUserId, out var userId))
             return Unauthorized();
 
-        var clientMessageId = payload.ClientMessageId ?? Guid.NewGuid();
+        var clientMessageId = payload.ClientMessageId ?? Guid.Empty;
         var request = new SendMessageRequest(payload.Content);
-        return Ok(await _messageService.SendMessageAsync(userId, clientMessageId, conversationId, request));
+        return Ok(await _messageService.SendMessageAsync(userId, clientMessageId, conversationId, request, HttpContext.RequestAborted));
     }
 
     [HttpDelete("api/messages/{messageId:guid}")]
@@ -53,7 +54,19 @@ public class MessagesController : ControllerBase
         if (!Guid.TryParse(rawUserId, out var userId))
             return Unauthorized();
 
-        await _messageService.DeleteMessageAsync(userId, messageId);
+        await _messageService.DeleteMessageAsync(userId, messageId, HttpContext.RequestAborted);
         return NoContent();
     }
+
+    [HttpDelete("api/messages/{messageId:guid}/for-me")]
+    public async Task<IActionResult> DeleteForMe(Guid messageId)
+    {
+        await _messageService.DeleteForMeAsync(Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!), messageId, HttpContext.RequestAborted);
+        return NoContent();
+    }
+
+    [HttpPost("api/conversations/{conversationId:guid}/message-states")]
+    [EnableRateLimiting(RateLimitPolicies.GetMessages)]
+    public async Task<ActionResult<List<MessageStateResponse>>> States(Guid conversationId, MessageStatesRequest request) =>
+        Ok(await _messageService.GetStatesAsync(Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!), conversationId, request.Ids, HttpContext.RequestAborted));
 }

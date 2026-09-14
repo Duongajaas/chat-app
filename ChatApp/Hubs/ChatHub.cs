@@ -1,146 +1,58 @@
-using ChatApp.Common;
+using System.Security.Claims;
 using ChatApp.Data;
-using ChatApp.Models;
 using ChatApp.Presence;
+using ChatApp.Realtime;
+using ChatApp.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace ChatApp.Hubs;
 
-public class ChatHub : Hub
+[Authorize]
+public class ChatHub(AppDbContext db, IPresenceTracker presence, IMessageService messages, PresenceEvents presenceEvents) : Hub
 {
-    private readonly AppDbContext _db;
-    private readonly IPresenceTracker _presenceTracker;
-    private static readonly TimeSpan GracePeriod = TimeSpan.FromSeconds(8);
-
-    public ChatHub(AppDbContext db, IPresenceTracker presenceTracker)
-    {
-        _db = db;
-        _presenceTracker = presenceTracker;
-    }
+    private Guid UserId => Guid.Parse(Context.User!.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
     public override async Task OnConnectedAsync()
     {
-        var userId = GetCurrentUserId();
-        if (userId is null)
-        {
-            Context.Abort();
-            return;
-        }
-
-        await _presenceTracker.AddConnectionAsync(userId.Value, Context.ConnectionId);
-        await Groups.AddToGroupAsync(Context.ConnectionId, "user-" + userId.Value);
-
-        await Clients.All.SendAsync("UserPresenceChanged", new
-        {
-            UserId = userId.Value,
-            IsOnline = true,
-            LastSeenAt = DateTime.UtcNow
-        });
-
+        await presence.AddConnectionAsync(UserId, Context.ConnectionId);
+        await presenceEvents.NotifyLocalAsync(UserId);
+        await RefreshPresence();
         await base.OnConnectedAsync();
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        var userId = GetCurrentUserId();
-        if (userId is not null)
-        {
-            await _presenceTracker.RemoveConnectionAsync(userId.Value, Context.ConnectionId);
-
-            await Task.Delay(GracePeriod);
-
-            if (await _presenceTracker.IsOnlineAsync(userId.Value))
-            {
-                await base.OnDisconnectedAsync(exception);
-                return;
-            }
-
-            await Clients.All.SendAsync("UserPresenceChanged", new
-            {
-                UserId = userId.Value,
-                IsOnline = false,
-                LastSeenAt = DateTime.UtcNow
-            });
-        }
-
+        await presence.RemoveConnectionAsync(UserId, Context.ConnectionId);
+        await presenceEvents.NotifyLocalAsync(UserId);
         await base.OnDisconnectedAsync(exception);
     }
 
-    public async Task JoinConversation(Guid conversationId)
-    {
-        await EnsureConversationMembershipAsync(conversationId);
-        await Groups.AddToGroupAsync(Context.ConnectionId, conversationId.ToString());
-    }
+    // User-targeted delivery is independent of room subscriptions, so stale joins cannot leak messages.
+    public async Task JoinConversation(Guid conversationId) => await EnsureMemberAsync(conversationId);
+    public Task LeaveConversation(Guid conversationId) => Task.CompletedTask;
 
-    public async Task LeaveConversation(Guid conversationId)
-    {
-        await EnsureConversationMembershipAsync(conversationId);
-        await Groups.RemoveFromGroupAsync(Context.ConnectionId, conversationId.ToString());
-    }
-
-    public async Task SendMessage(Guid conversationId, string content)
-    {
-        await EnsureConversationMembershipAsync(conversationId);
-        await Clients.Group(conversationId.ToString()).SendAsync("ReceiveMessage", new
-        {
-            ConversationId = conversationId,
-            SenderId = GetCurrentUserId(),
-            Content = content,
-            CreatedAt = DateTime.UtcNow
-        });
-    }
+    public Task RefreshPresence() => presenceEvents.SendSnapshotAsync(UserId, Clients.Caller, Context.ConnectionAborted);
 
     public async Task Typing(Guid conversationId, bool isTyping)
     {
-        await EnsureConversationMembershipAsync(conversationId);
-        await Clients.Group(conversationId.ToString()).SendAsync("TypingIndicator", new
-        {
-            ConversationId = conversationId,
-            UserId = GetCurrentUserId(),
-            IsTyping = isTyping,
-            Timestamp = DateTime.UtcNow
-        });
+        await using var tx = await db.Database.BeginTransactionAsync(Context.ConnectionAborted);
+        await ConversationLock.AcquireAsync(db, conversationId, Context.ConnectionAborted);
+        await EnsureMemberAsync(conversationId);
+        var recipients = await ConversationEvents.RecipientsAsync(db, conversationId, Context.ConnectionAborted);
+        await Clients.Users(recipients).SendAsync("TypingIndicator", new
+        { ConversationId = conversationId, UserId, IsTyping = isTyping }, Context.ConnectionAborted);
+        await tx.CommitAsync(Context.ConnectionAborted);
     }
 
-    public async Task MarkAsRead(Guid conversationId)
+    public Task MarkAsRead(Guid conversationId, long sequence) =>
+        messages.MarkAsReadAsync(UserId, conversationId, sequence, Context.ConnectionAborted);
+
+    private async Task EnsureMemberAsync(Guid id)
     {
-        await EnsureConversationMembershipAsync(conversationId);
-        await Clients.Group(conversationId.ToString()).SendAsync("MessagesRead", new
-        {
-            ConversationId = conversationId,
-            UserId = GetCurrentUserId(),
-            ReadAt = DateTime.UtcNow
-        });
+        if (!await db.ConversationMembers.AnyAsync(m => m.ConversationId == id && m.UserId == UserId && m.LeftAt == null && db.Conversations.Any(c => c.Id == id && c.ClosedAt == null && c.DeletedAt == null)))
+            throw new HubException("Bạn không có quyền truy cập hội thoại.");
     }
 
-    private async Task EnsureConversationMembershipAsync(Guid conversationId)
-    {
-        var userId = GetCurrentUserId();
-        if (userId is null)
-        {
-            throw new HubException("Unauthorized");
-        }
-
-        var isMember = await _db.ConversationMembers
-            .AnyAsync(x => x.ConversationId == conversationId && x.UserId == userId && x.LeftAt == null);
-
-        if (!isMember)
-        {
-            throw new HubException("Bạn không có quyền truy cập cuộc trò chuyện này.");
-        }
-    }
-
-    private Guid? GetCurrentUserId()
-    {
-        var raw = Context.User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
-            ?? Context.User?.FindFirst("sub")?.Value;
-
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return null;
-        }
-
-        return Guid.TryParse(raw, out var id) ? id : null;
-    }
 }

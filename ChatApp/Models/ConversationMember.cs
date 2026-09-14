@@ -11,7 +11,11 @@ public class ConversationMember
     public string? Nickname { get; set; }
 
     public DateTime JoinedAt { get; set; } = DateTime.UtcNow;
+    public long? LeftAtSequence { get; set; }
+    public long LastReadSequence { get; set; }
     public DateTime? LeftAt { get; set; }
+    public string? LeaveReason { get; set; }
+    public Guid? RemovedByUserId { get; set; }
 
     public DateTime? MutedUntil { get; set; }
 

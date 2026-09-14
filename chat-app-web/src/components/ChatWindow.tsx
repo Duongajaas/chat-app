@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { GroupSettings } from "./GroupSettings";
 import { Avatar } from "./Avatar";
 import { PhoneIcon, VideoIcon, SendIcon, PaperclipIcon, SmileIcon, MoreIcon } from "./icons";
 import type { Conversation, ChatMessage } from "../types";
-import { sendTyping } from "../realtime/connection";
+import { sendTyping, markConversationAsRead } from "../realtime/connection";
 import { usePresenceStore } from "../store/presenceStore";
 import { useChatStore } from "../store/chatStore";
 import { useAuth } from "../context/AuthContext";
@@ -14,12 +15,18 @@ interface ChatWindowProps {
   messages: ChatMessage[];
   onSendMessage: (content: string) => void;
   onDeleteMessage: (messageId: string) => Promise<void>;
-  onDeleteForMe: (messageId: string) => void;
+  onDeleteForMe: (messageId: string) => Promise<void>;
+  onRetryMessage: (message: ChatMessage) => void;
   onBlockUser: (userId: string) => Promise<void>;
   onBack?: () => void;
 }
 
-export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMessage, onDeleteForMe, onBlockUser, onBack }: ChatWindowProps) {
+export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMessage, onDeleteForMe, onBlockUser, onBack, onRetryMessage }: ChatWindowProps) {
+  const connectionStatus = useChatStore(state => state.connectionStatus);
+  const [showGroup, setShowGroup] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const [nearBottom, setNearBottom] = useState(true);
+  const [visible, setVisible] = useState(document.visibilityState === "visible");
   const [draft, setDraft] = useState("");
   const [openMessageId, setOpenMessageId] = useState<string | null>(null);
   const [isActionsMenuOpen, setIsActionsMenuOpen] = useState(false);
@@ -27,7 +34,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
   const onlineUserIds = usePresenceStore((state) => state.onlineUserIds);
   const isTyping = usePresenceStore((state) => conversation ? state.typingByConversation[conversation.id] : false);
-  const hasRead = usePresenceStore((state) => conversation ? state.readByConversation[conversation.id] : false);
+  const hasRead = usePresenceStore((state) => conversation ? state.readByConversation[conversation.id] : 0);
   const { user } = useAuth();
   const typingStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingStopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -55,6 +62,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
 
   useEffect(() => {
     setIsActionsMenuOpen(false);
+    setShowGroup(false);
   }, [conversation?.id]);
 
   useEffect(() => {
@@ -66,6 +74,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
       ([entry]) => {
         const nearBottom = entry.isIntersecting;
         isNearBottomRef.current = nearBottom;
+        setNearBottom(nearBottom);
         if (nearBottom && conversation) clearNewMessageBelow(conversation.id);
       },
       { root: container, threshold: 0.1 }
@@ -74,6 +83,26 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [conversation?.id, clearNewMessageBelow, scrollContainerRef]);
+
+  useEffect(() => {
+    const update = () => setVisible(document.visibilityState === "visible" && document.hasFocus());
+    document.addEventListener("visibilitychange", update);
+    window.addEventListener("focus", update);
+    window.addEventListener("blur", update);
+    update();
+    return () => {
+      document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("focus", update);
+      window.removeEventListener("blur", update);
+    };
+  }, []);
+
+  const lastSequence = messages.reduce((max, m) => Number.isSafeInteger(m.sequence) && m.sequence < Number.MAX_SAFE_INTEGER ? Math.max(max, m.sequence) : max, 0);
+  useEffect(() => {
+    if (!conversation || conversation.hasLeft || conversation.closedAt || !nearBottom || !visible || !lastSequence || connectionStatus !== "connected") return;
+    const timer = setTimeout(() => { void markConversationAsRead(conversation.id, lastSequence).catch(() => undefined); }, 300);
+    return () => clearTimeout(timer);
+  }, [conversation?.id, conversation?.hasLeft, conversation?.closedAt, nearBottom, visible, lastSequence, connectionStatus]);
 
   if (!conversation) {
     return (
@@ -85,13 +114,13 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!draft.trim()) return;
+    if (!draft.trim() || conversation?.hasLeft || conversation?.closedAt || conversation?.isBlocked) return;
     onSendMessage(draft.trim());
     setDraft("");
   }
 
   const conversationId = conversation.id;
-  const isBlocked = conversation.isBlocked === true;
+  const isBlocked = conversation.isBlocked === true || conversation.hasLeft === true || !!conversation.closedAt;
   const isDirectOnline = !isBlocked && conversation.type === "Direct" && (conversation.peerUserId ? onlineUserIds.has(conversation.peerUserId) : conversation.isOnline);
   const isAdmin = conversation.isAdmin === true;
 
@@ -114,10 +143,10 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   }
 
   function canDeleteForEveryone(message: ChatMessage) {
-    if (message.status === "Deleted") return false;
+    if (message.status === "Deleted" || message.status === "Sending" || message.status === "Failed") return false;
     const messageIsMine = message.senderId === user?.id;
     const withinWindow = Date.now() - new Date(message.createdAt).getTime() < 15 * 60 * 1000;
-    return (messageIsMine && withinWindow) || (!messageIsMine && isAdmin);
+    return !isBlocked && ((messageIsMine && withinWindow) || isAdmin);
   }
 
   async function deleteForEveryone(message: ChatMessage) {
@@ -126,14 +155,14 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
       await onDeleteMessage(message.id);
       setOpenMessageId(null);
     } catch (error) {
-      console.error("Không thể xóa tin nhắn:", error);
+      setActionError("Không thể xóa tin nhắn. Vui lòng thử lại.");
     } finally {
       setDeletingMessageId(null);
     }
   }
 
   async function handleBlockUser() {
-    if (!conversation.peerUserId || isBlocking) return;
+    if (!conversation?.peerUserId || isBlocking) return;
 
     const confirmed = window.confirm("Chặn người này? Hai bạn sẽ không thể nhắn tin riêng cho nhau.");
     if (!confirmed) return;
@@ -164,6 +193,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
           </div>
         </div>
         <div className="chat-window__actions">
+          {conversation.type === "Group" && <button onClick={() => setShowGroup(v => !v)}>Thông tin nhóm</button>}
           <button className="icon-btn" title={isBlocked ? "Không thể gọi" : "Gọi thoại (sắp có)"} disabled={isBlocked}>
             <PhoneIcon />
           </button>
@@ -187,6 +217,10 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
         </div>
       </header>
 
+      {showGroup && conversation.type === "Group" && <GroupSettings key={conversation.id} conversation={conversation} onClose={() => setShowGroup(false)} />}
+      {(conversation.hasLeft || conversation.closedAt) && <p role="status">Chỉ đọc lịch sử trong những khoảng bạn là thành viên.</p>}
+      {connectionStatus !== "connected" && <p role="status">{connectionStatus === "connecting" ? "Đang kết nối lại…" : "Mất kết nối. Ứng dụng sẽ tự thử lại."}</p>}
+      {actionError && <p role="alert">{actionError}</p>}
       <div className="chat-window__messages" ref={scrollContainerRef}>
         {hasMore && (
           <div className="chat-window__load-older">
@@ -207,13 +241,13 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
             <div className="message-bubble" onContextMenu={(event) => { event.preventDefault(); setOpenMessageId(m.id); }}>
               {m.status === "Deleted" ? <p className="message-bubble__deleted">Tin nhắn đã được thu hồi</p> : <p>{m.content}</p>}
               <span className="message-bubble__time">
-                {m.createdAt}
-                {m.status === "Failed" && " • Gửi thất bại"}
+                {new Date(m.createdAt).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}
+                {m.status === "Failed" && <button type="button" onClick={() => onRetryMessage(m)}>Gửi lại</button>}
               </span>
-              {hasRead && isMine && index === messages.length - 1 && <span className="message-bubble__time">Đã xem</span>}
+              {conversation.type === "Direct" && (hasRead ?? 0) >= m.sequence && isMine && index === messages.length - 1 && <span className="message-bubble__time">Đã xem</span>}
               {openMessageId === m.id && (
                 <div className="message-menu" role="menu">
-                  {isMine && <button type="button" onClick={() => { onDeleteForMe(m.id); setOpenMessageId(null); }}>Xóa phía tôi</button>}
+                  {isMine && <button type="button" onClick={() => { void onDeleteForMe(m.id).then(() => setOpenMessageId(null)).catch(() => setActionError("Không thể xóa tin nhắn. Vui lòng thử lại.")); }}>Xóa phía tôi</button>}
                   {canDeleteForEveryone(m) && <button type="button" disabled={deletingMessageId === m.id} onClick={() => deleteForEveryone(m)}>Xóa với mọi người</button>}
                 </div>
               )}
@@ -239,13 +273,13 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
       )}
 
       {isBlocked ? (
-        <div className="chat-window__blocked-message">Bạn không thể nhắn tin với người này.</div>
+        <div className="chat-window__blocked-message">{conversation.type === "Group" ? "Bạn không còn quyền gửi tin trong nhóm này." : "Bạn không thể nhắn tin với người này."}</div>
       ) : (
         <form className="chat-window__composer" onSubmit={handleSubmit}>
           <button type="button" className="icon-btn" title="Đính kèm (sắp có)" disabled>
             <PaperclipIcon />
           </button>
-          <input placeholder={`Nhắn tin tới ${conversation.name}`} value={draft} onChange={(e) => handleDraftChange(e.target.value)} />
+          <input maxLength={4000} placeholder={`Nhắn tin tới ${conversation.name}`} value={draft} onChange={(e) => handleDraftChange(e.target.value)} />
           <button type="button" className="icon-btn" title="Emoji (sắp có)" disabled>
             <SmileIcon />
           </button>

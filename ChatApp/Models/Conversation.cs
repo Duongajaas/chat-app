@@ -15,5 +15,8 @@ public class Conversation
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public long Version { get; set; }
+    public DateTime? ClosedAt { get; set; }
+    public string? CloseReason { get; set; }
     public DateTime? DeletedAt { get; set; }
 }
