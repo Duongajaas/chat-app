@@ -8,33 +8,11 @@ import { messagesApi } from "../api/messages";
 import { friendRequestsApi } from "../api/friendRequests";
 import { blocksApi } from "../api/blocks";
 import { useChatStore } from "../store/chatStore";
-import { joinConversation, leaveConversation, markConversationAsRead } from "../realtime/connection";
+import { joinConversation, leaveConversation, syncConversation, refreshConversation } from "../realtime/connection";
 import { useAuth } from "../context/AuthContext";
-import type { ChatMessage, Conversation } from "../types";
-
-function normalizeConversation(item: any): Conversation {
-  const id = String(item.id);
-  const name = item.name ?? "Cuộc trò chuyện";
-  const palette = ["#33d6a6", "#7fa8ff", "#ff9f6b", "#c792ea", "#f4c95d", "#ff7aa2"];
-  const index = Array.from(id).reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % palette.length;
-
-  return {
-    id,
-    name,
-    type: item.type === "Group" ? "Group" : "Direct",
-    avatarColor: palette[index],
-    lastMessage: item.lastMessage ?? "Bắt đầu cuộc trò chuyện",
-    lastMessageAt: item.lastMessageAt ? new Date(item.lastMessageAt).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit" }) : "Gần đây",
-    unreadCount: Number(item.unreadCount ?? 0),
-    isOnline: false,
-    isBlocked: Boolean(item.isBlocked),
-    requestStatus: item.requestStatus ?? "Accepted",
-    peerUserId: item.peerUserId ?? item.otherUserId,
-    createdAt: item.createdAt,
-    updatedAt: item.updatedAt,
-    lastMessageId: item.lastMessageId ?? null,
-  };
-}
+import { getSessionVersion } from "../api/client";
+import { normalizeConversation } from "../utils/conversationUtils";
+import type { ChatMessage } from "../types";
 
 export default function ChatPage() {
   const { user } = useAuth();
@@ -48,15 +26,16 @@ export default function ChatPage() {
   const setActiveConversationId = useChatStore((state) => state.setActiveConversationId);
   const setMessagesForConversation = useChatStore((state) => state.setMessagesForConversation);
   const appendMessage = useChatStore((state) => state.appendMessage);
-  const updateMessage = useChatStore((state) => state.updateMessage);
-  const removeMessage = useChatStore((state) => state.removeMessage);
 
+  const connectionStatus = useChatStore(state => state.connectionStatus);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [showMobileChat, setShowMobileChat] = useState(false);
 
   const activeConversationIdRef = useRef(activeConversationId);
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
-  }, [activeConversationId]);
+  }, [activeConversationId, connectionStatus]);
 
   useEffect(() => {
     if (requestedConversationId) {
@@ -72,7 +51,8 @@ export default function ChatPage() {
         const list = await conversationsApi.list();
         if (!isMounted) return;
 
-        const normalized = list.map(normalizeConversation);
+        const normalized = list.items.map(normalizeConversation);
+        setNextCursor(list.nextCursor);
         const requestedConversation = requestedConversationId && !normalized.some((conversation) => conversation.id === requestedConversationId)
           ? normalizeConversation(await conversationsApi.getById(requestedConversationId))
           : null;
@@ -98,8 +78,11 @@ export default function ChatPage() {
     if (!activeConversationId) return;
 
     const activeId = activeConversationId;
-    const existing = messagesByConversation[activeId];
-    if (existing && existing.length > 0) return;
+    const existing = useChatStore.getState().messagesByConversation[activeId];
+    if (existing && existing.length > 0) {
+      void syncConversation(activeId).catch(() => undefined);
+      return;
+    }
 
     let isMounted = true;
 
@@ -108,14 +91,9 @@ export default function ChatPage() {
         const response = await messagesApi.list(activeId);
         if (!isMounted) return;
         
-        setMessagesForConversation(
-          activeId,
-          response.messages.map((item) => ({
-            ...item,
-            senderId: String(item.senderId),
-            createdAt: new Date(item.createdAt).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit" }),
-          }))
-        );
+        useChatStore.getState().syncNewerMessages(activeId, response.messages);
+        useChatStore.getState().setHasMore(activeId, response.hasMore);
+        useChatStore.getState().setSyncedThrough(activeId, response.messages.reduce((max, m) => Math.max(max, m.sequence), 0));
       } catch (error) {
         console.error("Không thể tải tin nhắn:", error);
       }
@@ -136,7 +114,7 @@ export default function ChatPage() {
     async function enterConversation() {
       try {
         await joinConversation(activeId);
-        if (isMounted) await markConversationAsRead(activeId);
+        if (!isMounted) await leaveConversation(activeId);
       } catch (error) {
         console.error("Không thể tham gia realtime conversation:", error);
       }
@@ -147,41 +125,42 @@ export default function ChatPage() {
       isMounted = false;
       leaveConversation(activeId).catch(() => undefined);
     };
-  }, [activeConversationId]);
+  }, [activeConversationId, connectionStatus]);
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
   const activeMessages = activeConversationId ? messagesByConversation[activeConversationId] ?? [] : [];
 
-  async function handleSend(content: string) {
-    if (!activeConversationId || !user) return;
-
-    const clientMessageId = crypto.randomUUID();
-    const optimisticMessage: ChatMessage = {
-      id: clientMessageId,
-      conversationId: activeConversationId,
-      senderId: user.id,
-      sequence: Number.MAX_VALUE, // Optimistic → ở cuối tới khi server trả về thật
-      content,
-      createdAt: new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }),
-      clientMessageId,
-      status: "Sending",
-    };
-
-    appendMessage(activeConversationId, optimisticMessage);
-
+  async function handleSend(content: string, retry?: ChatMessage) {
+    const id = retry?.conversationId ?? activeConversationId;
+    if (!id || !user) return;
+    const version = getSessionVersion();
+    const clientMessageId = retry?.clientMessageId ?? crypto.randomUUID();
+    appendMessage(id, {
+      id: clientMessageId, conversationId: id, senderId: user.id, sequence: Number.MAX_VALUE,
+      content, createdAt: retry?.createdAt ?? new Date().toISOString(), clientMessageId, status: "Sending",
+    });
     try {
-      await messagesApi.send(activeConversationId, { clientMessageId, content });
-      // Broadcast từ server sẽ merge tự động qua appendMessage (xóa optimistic, thêm version thật)
-      // Không cần updateMessageByClientId nữa
-    } catch (error) {
-      console.error("Gửi tin nhắn thất bại:", error);
-      // Đánh dấu status = Failed, optimistic sẽ hiển thị as failed message
-      const messages = messagesByConversation[activeConversationId] ?? [];
-      const failedMsg = messages.find((m) => m.clientMessageId === clientMessageId);
-      if (failedMsg) {
-        updateMessage(activeConversationId, failedMsg.id, { status: "Failed" });
-      }
+      const response = await messagesApi.send(id, { clientMessageId, content });
+      if (version !== getSessionVersion()) return;
+      appendMessage(id, { ...response, status: response.status === "Deleted" ? "Deleted" : "Sent" });
+      refreshConversation(id);
+    } catch {
+      if (version === getSessionVersion()) useChatStore.getState().failMessage(id, clientMessageId);
     }
+  }
+
+  async function loadMoreConversations() {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    const version = getSessionVersion();
+    try {
+      const page = await conversationsApi.list(nextCursor);
+      if (version !== getSessionVersion()) return;
+      const items = new Map(useChatStore.getState().conversations.map(c => [c.id, c]));
+      page.items.map(normalizeConversation).forEach(c => items.set(c.id, c));
+      setConversations([...items.values()]);
+      setNextCursor(page.nextCursor);
+    } finally { if (version === getSessionVersion()) setLoadingMore(false); }
   }
 
   async function handleAcceptRequest(id: string) {
@@ -218,7 +197,10 @@ export default function ChatPage() {
     <div className={`app-shell ${showMobileChat ? "app-shell--mobile-chat" : ""}`}>
       <Sidebar />
       <ConversationList
-        conversations={conversations}
+        conversations={[...conversations].sort((a, b) => Date.parse(b.lastMessageAt) - Date.parse(a.lastMessageAt))}
+        hasMore={!!nextCursor}
+        loadingMore={loadingMore}
+        onLoadMore={() => { void loadMoreConversations().catch(() => undefined); }}
         activeId={activeConversationId}
         onSelect={handleSelectConversation}
         onAcceptRequest={handleAcceptRequest}
@@ -228,16 +210,20 @@ export default function ChatPage() {
         conversation={activeConversation}
         messages={activeMessages}
         onSendMessage={handleSend}
+        onRetryMessage={(message) => { void handleSend(message.content, message); }}
         onBlockUser={handleBlockUser}
         onBack={() => setShowMobileChat(false)}
         onDeleteMessage={async (messageId) => {
+          const version = getSessionVersion();
+          const id = activeConversationId;
           await messagesApi.delete(messageId);
-          if (activeConversationId) {
-            updateMessage(activeConversationId, messageId, { content: "Tin nhắn đã được thu hồi", status: "Deleted" });
-          }
+          if (id && version === getSessionVersion()) useChatStore.getState().deleteMessage(id, messageId);
         }}
-        onDeleteForMe={(messageId) => {
-          if (activeConversationId) removeMessage(activeConversationId, messageId);
+        onDeleteForMe={async (messageId) => {
+          const version = getSessionVersion();
+          const id = activeConversationId;
+          await messagesApi.deleteForMe(messageId);
+          if (id && version === getSessionVersion()) useChatStore.getState().hideMessage(id, messageId);
         }}
       />
     </div>

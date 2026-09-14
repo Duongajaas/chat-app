@@ -6,7 +6,7 @@ public class ConversationInvite
     public Guid ConversationId { get; set; }
     public Guid? CreatedBy { get; set; }
 
-    public string InviteCode { get; set; } = default!;
+    public string InviteCodeHash { get; set; } = default!;
     public int? MaxUses { get; set; }
     public int UsedCount { get; set; } = 0;
 

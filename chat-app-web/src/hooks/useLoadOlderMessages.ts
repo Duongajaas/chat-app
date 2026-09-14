@@ -1,4 +1,5 @@
 import { useCallback, useRef } from "react";
+import { getSessionVersion } from "../api/client";
 import { messagesApi } from "../api/messages";
 import { useChatStore } from "../store/chatStore";
 
@@ -18,6 +19,7 @@ export function useLoadOlderMessages(conversationId: string | null) {
   const loadOlder = useCallback(async () => {
     if (!conversationId || isLoading || !hasMore || messages.length === 0) return;
 
+    const version = getSessionVersion();
     setIsLoadingOlder(conversationId, true);
 
     try {
@@ -31,11 +33,8 @@ export function useLoadOlderMessages(conversationId: string | null) {
 
       // Fetch older messages (before = oldest sequence)
       const response = await messagesApi.list(conversationId, oldestSequence, undefined, 50);
-      const olderMessages = response.messages.map((item) => ({
-        ...item,
-        senderId: String(item.senderId),
-        createdAt: new Date(item.createdAt).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit" }),
-      }));
+      if (version !== getSessionVersion()) return;
+      const olderMessages = response.messages;
 
       if (olderMessages.length > 0) {
         prependMessages(conversationId, olderMessages);
@@ -47,7 +46,7 @@ export function useLoadOlderMessages(conversationId: string | null) {
       console.error("Failed to load older messages:", error);
       // Keep hasMore as is in case of error (allow retry)
     } finally {
-      setIsLoadingOlder(conversationId, false);
+      if (version === getSessionVersion()) setIsLoadingOlder(conversationId, false);
     }
   }, [conversationId, isLoading, hasMore, messages, prependMessages, setHasMore, setIsLoadingOlder]);
 

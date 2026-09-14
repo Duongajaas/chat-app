@@ -1,0 +1,102 @@
+# Shared Redis state; keep one worker and configure nginx affinity before scaling API replicas.
+name: chatapp
+x-api-environment: &api-environment
+  ASPNETCORE_ENVIRONMENT: Production
+  Redis__Enabled: "true"
+  ConnectionStrings__Redis: "redis:6379,connectTimeout=2000,asyncTimeout=2000,syncTimeout=2000"
+  Redis__ChannelPrefix: ${REDIS_CHANNEL_PREFIX:-chatapp-production}
+  Presence__HeartbeatSeconds: 15
+  Presence__ConnectionTtlSeconds: 60
+  Presence__SweepSeconds: 5
+  ConnectionStrings__DefaultConnection: "Host=${POSTGRES_HOST};Database=${POSTGRES_DB:-chatapp};Username=${POSTGRES_USER:-chatapp};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}"
+  Jwt__SecretKey: ${JWT_SECRET}
+  Jwt__Issuer: ChatApp
+  Jwt__Audience: ChatApp.Client
+  Jwt__AccessTokenMinutes: 15
+  Cors__AllowedOrigins__0: ${PUBLIC_ORIGIN}
+  AppUrls__FrontendBaseUrl: ${PUBLIC_ORIGIN}
+  GoogleAuth__ClientId: ${GOOGLE_CLIENT_ID}
+  ReverseProxy__KnownProxies__0: 172.30.90.10
+  Smtp__Host: ${SMTP_HOST}
+  Smtp__Port: ${SMTP_PORT}
+  Smtp__Username: ${SMTP_USERNAME}
+  Smtp__Password: ${SMTP_PASSWORD}
+  Smtp__FromEmail: ${SMTP_FROM_EMAIL}
+  Smtp__FromName: ChatApp
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks: [chat]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes: ["database:/var/lib/postgresql/data"]
+    networks: [chat]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    image: chatapp-api:${APP_VERSION:-local}
+    build: ./ChatApp
+    entrypoint: ["/app/efbundle"]
+    environment: *api-environment
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [chat]
+    restart: "no"
+  api:
+    image: chatapp-api:${APP_VERSION:-local}
+    build: ./ChatApp
+    environment:
+      <<: *api-environment
+      Runtime__Role: api
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    networks: [chat]
+    restart: unless-stopped
+    init: true
+  worker:
+    image: chatapp-api:${APP_VERSION:-local}
+    build: ./ChatApp
+    environment:
+      <<: *api-environment
+      Runtime__Role: worker
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    networks: [chat]
+    restart: unless-stopped
+    init: true
+  web:
+    image: chatapp-web:${APP_VERSION:-local}
+    build:
+      context: ./chat-app-web
+      args:
+        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    ports: ["80:8080", "443:8443"]
+    volumes: ["${TLS_DIRECTORY}:/etc/nginx/tls:ro"]
+    depends_on:
+      api: { condition: service_healthy }
+    networks:
+      chat: { ipv4_address: 172.30.90.10 }
+    restart: unless-stopped
+networks:
+  chat:
+    ipam:
+      config: [{ subnet: 172.30.90.0/24 }]
+volumes:
+  database:

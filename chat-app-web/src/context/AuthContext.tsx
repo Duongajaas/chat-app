@@ -3,6 +3,8 @@ import { authApi } from "../api/auth";
 import { usersApi } from "../api/users";
 import { clearAccessToken, refreshAcrossTabs, setAccessToken } from "../api/client";
 import { startChatHub, stopChatHub } from "../realtime/connection";
+import { useChatStore } from "../store/chatStore";
+import { usePresenceStore } from "../store/presenceStore";
 import type { User, AuthResponse, RegisterPayload } from "../types";
 
 interface AuthContextValue {
@@ -21,6 +23,13 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const clearSession = useCallback(() => {
+    clearAccessToken();
+    void stopChatHub();
+    useChatStore.getState().reset();
+    usePresenceStore.getState().reset();
+    setUser(null);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,8 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(userData);
       } catch {
         if (!cancelled) {
-          clearAccessToken();
-          setUser(null);
+          clearSession();
         }
       } finally {
         if (!cancelled) {
@@ -65,8 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     function handleSessionExpired() {
-      clearAccessToken();
-      setUser(null);
+      clearSession();
     }
 
     window.addEventListener("auth:session-expired", handleSessionExpired);
@@ -86,9 +93,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user?.id]);
 
   const applyAuthResponse = useCallback((data: AuthResponse) => {
+    clearSession();
     setAccessToken(data.accessToken);
     setUser(data.user);
-  }, []);
+  }, [clearSession]);
 
   const login = useCallback(
     async (username: string, password: string) => {
@@ -123,8 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // Dù API lỗi vẫn clear session phía client
     }
-    clearAccessToken();
-    setUser(null);
+    clearSession();
   }, []);
 
   const value: AuthContextValue = {

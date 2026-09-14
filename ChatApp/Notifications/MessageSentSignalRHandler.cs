@@ -1,23 +1,16 @@
-using ChatApp.Hubs;
+using ChatApp.Data;
 using ChatApp.Messages;
+using ChatApp.Realtime;
 using MediatR;
-using Microsoft.AspNetCore.SignalR;
 
 namespace ChatApp.Notifications;
 
-public class MessageSentSignalRHandler : INotificationHandler<MessageSentNotification>
+// Compatibility for other publishers: durable delivery follows the same recipient checks.
+public class MessageSentSignalRHandler(AppDbContext db) : INotificationHandler<MessageSentNotification>
 {
-    private readonly IHubContext<ChatHub> _hubContext;
-
-    public MessageSentSignalRHandler(IHubContext<ChatHub> hubContext)
-    {
-        _hubContext = hubContext;
-    }
-
     public async Task Handle(MessageSentNotification notification, CancellationToken cancellationToken)
     {
-        await _hubContext.Clients
-            .Group(notification.ConversationId.ToString())
-            .SendAsync("ReceiveMessage", notification.Message, cancellationToken);
+        ConversationEvents.Add(db, notification.ConversationId, "ReceiveMessage", notification.Message);
+        await db.SaveChangesAsync(cancellationToken);
     }
 }

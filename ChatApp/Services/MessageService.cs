@@ -1,217 +1,173 @@
 using ChatApp.Common;
 using ChatApp.Data;
 using ChatApp.DTOs;
-using ChatApp.Messages;
 using ChatApp.Models;
-using MediatR;
+using ChatApp.Realtime;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace ChatApp.Services;
 
-public class MessageService : IMessageService
+public class MessageService(AppDbContext db, IBlockService blocks) : IMessageService
 {
-    private readonly AppDbContext _db;
-    private readonly IMediator _mediator;
-    private readonly IConversationService _conversationService;
-    private readonly IBlockService _blockService;
-
-    public MessageService(
-        AppDbContext db,
-        IMediator mediator,
-        IConversationService conversationService,
-        IBlockService blockService)
+    public async Task<MessageListResponse> GetMessagesAsync(Guid userId, Guid conversationId, long? before = null,
+        long? after = null, int limit = 50, CancellationToken ct = default)
     {
-        _db = db;
-        _mediator = mediator;
-        _conversationService = conversationService;
-        _blockService = blockService;
+        var member = await ReadableMemberAsync(userId, conversationId, ct);
+        if (before.HasValue && after.HasValue) throw AppException.BadRequest("Chỉ dùng before hoặc after.");
+        if (before < 0 || after < 0) throw AppException.BadRequest("Cursor không hợp lệ.");
+        var size = Math.Clamp(limit, 1, 100);
+        var query = VisibleMessages(member).AsNoTracking();
+        if (before.HasValue) query = query.Where(m => m.Sequence < before.Value);
+        if (after.HasValue) query = query.Where(m => m.Sequence > after.Value);
+        var page = await (after.HasValue ? query.OrderBy(m => m.Sequence) : query.OrderByDescending(m => m.Sequence))
+            .Take(size + 1).ToListAsync(ct);
+        var more = page.Count > size;
+        if (more) page.RemoveAt(size);
+        if (!after.HasValue) page.Reverse();
+        long? cursor = page.Count == 0 ? null : after.HasValue ? page[^1].Sequence : page[0].Sequence;
+        var peerRead = await db.ConversationMembers.Where(m => m.ConversationId == conversationId && m.UserId != userId)
+            .Select(m => (long?)m.LastReadSequence).MaxAsync(ct) ?? 0;
+        if (!await db.DirectConversations.AnyAsync(d => d.ConversationId == conversationId, ct)) peerRead = 0;
+        return new MessageListResponse(page.Select(ToResponse).ToList(), cursor, more, peerRead);
     }
 
-    public async Task<MessageListResponse> GetMessagesAsync(Guid userId, Guid conversationId, long? before = null, long? after = null, int limit = 50)
+    public async Task<MessageResponse> SendMessageAsync(Guid userId, Guid clientMessageId, Guid conversationId,
+        SendMessageRequest request, CancellationToken ct = default)
     {
-        var isMember = await _conversationService.IsMemberAsync(userId, conversationId);
-
-        if (!isMember)
-        {
-            throw AppException.Forbidden("Bạn không có quyền xem cuộc trò chuyện này.");
-        }
-
-        // Validate: không cho phép cả before và after cùng lúc
-        if (before.HasValue && after.HasValue)
-        {
-            throw AppException.BadRequest("Không được gửi cả 'before' lẫn 'after' cùng lúc.");
-        }
-
-        // Clamp limit
-        var effectiveLimit = Math.Clamp(limit, 1, 100);
-
-        var query = _db.Messages
-            .Where(m => m.ConversationId == conversationId && m.DeletedAt == null)
-            .AsQueryable();
-
-        // Ba chế độ:
-        if (after.HasValue)
-        {
-            // Reconnect Sync: lấy tin > after, sort cũ→mới
-            query = query.Where(m => m.Sequence > after.Value)
-                .OrderBy(m => m.Sequence);
-        }
-        else if (before.HasValue)
-        {
-            // Load Older: lấy tin < before, sort cũ→mới
-            query = query.Where(m => m.Sequence < before.Value)
-                .OrderByDescending(m => m.Sequence)
-                .Take(effectiveLimit)
-                .OrderBy(m => m.Sequence);
-        }
-        else
-        {
-            // Initial Load: N tin mới nhất, sort cũ→mới
-            query = query.OrderByDescending(m => m.Sequence)
-                .Take(effectiveLimit)
-                .OrderBy(m => m.Sequence);
-        }
-
-        var messages = await query
-            .Select(m => new MessageResponse(
-                m.Id,
-                m.ConversationId,
-                m.SenderId ?? Guid.Empty,
-                m.Sequence,
-                m.Content,
-                m.ClientMessageId,
-                m.CreatedAt,
-                m.EditedAt))
-            .ToListAsync();
-
-        // Tính NextCursor và HasMore
-        long? nextCursor = null;
-        bool hasMore = false;
-
-        if (messages.Count > 0 && (before.HasValue || !after.HasValue))
-        {
-            // Có thể load older nếu đang ở chế độ Load Older hoặc Initial Load
-            var oldestSequence = messages[0].Sequence;
-            var countOlder = await _db.Messages
-                .CountAsync(m => m.ConversationId == conversationId && m.Sequence < oldestSequence && m.DeletedAt == null);
-            if (countOlder > 0)
-            {
-                nextCursor = oldestSequence;
-                hasMore = true;
-            }
-        }
-
-        return new MessageListResponse(messages, nextCursor, hasMore);
-    }
-
-    public async Task<MessageResponse> SendMessageAsync(Guid userId, Guid clientMessageId, Guid conversationId, SendMessageRequest request)
-    {
-        var isMember = await _conversationService.IsMemberAsync(userId, conversationId);
-
-        if (!isMember)
-        {
-            throw AppException.Forbidden("Bạn không có quyền gửi tin nhắn trong cuộc trò chuyện này.");
-        }
-
-        var directPeerId = await _db.DirectConversations
-            .Where(direct => direct.ConversationId == conversationId)
-            .Select(direct => direct.UserLowId == userId ? direct.UserHighId : direct.UserLowId)
-            .FirstOrDefaultAsync();
-
-        if (directPeerId != Guid.Empty && await _blockService.IsBlockedEitherWayAsync(userId, directPeerId))
-        {
+        if (clientMessageId == Guid.Empty) throw AppException.BadRequest("clientMessageId là bắt buộc.");
+        var content = request.Content?.Trim();
+        if (string.IsNullOrEmpty(content) || content.Length > 4000)
+            throw AppException.BadRequest("Tin nhắn phải có từ 1 đến 4000 ký tự.");
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await ConversationLock.AcquireAsync(db, conversationId, ct);
+        await ActiveMemberAsync(userId, conversationId, ct);
+        var direct = await db.DirectConversations.SingleOrDefaultAsync(d => d.ConversationId == conversationId, ct);
+        if (direct != null && await blocks.IsBlockedEitherWayAsync(direct.UserLowId, direct.UserHighId))
             throw AppException.Forbidden("Không thể gửi tin nhắn.");
-        }
-
-        var existingMessage = await _db.Messages
-            .FirstOrDefaultAsync(m => m.SenderId == userId && m.ClientMessageId == clientMessageId);
-
-        if (existingMessage is not null)
+        var existing = await db.Messages.AsNoTracking().SingleOrDefaultAsync(m => m.SenderId == userId && m.ClientMessageId == clientMessageId, ct);
+        if (existing != null) return IdempotentResponse(existing, conversationId, content);
+        var message = new Message { ConversationId = conversationId, SenderId = userId, ClientMessageId = clientMessageId, Content = content };
+        db.Messages.Add(message);
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation,
+            ConstraintName: "ix_messages_sender_id_client_message_id" })
         {
-            return new MessageResponse(
-                existingMessage.Id,
-                existingMessage.ConversationId,
-                existingMessage.SenderId ?? userId,
-                existingMessage.Sequence,
-                existingMessage.Content,
-                existingMessage.ClientMessageId,
-                existingMessage.CreatedAt,
-                existingMessage.EditedAt);
+            await tx.RollbackAsync(ct);
+            db.ChangeTracker.Clear();
+            var winner = await db.Messages.AsNoTracking().SingleAsync(m => m.SenderId == userId && m.ClientMessageId == clientMessageId, ct);
+            return IdempotentResponse(winner, conversationId, content);
         }
-
-        var message = new Message
-        {
-            ConversationId = conversationId,
-            SenderId = userId,
-            ClientMessageId = clientMessageId,
-            Content = request.Content,
-            Type = MessageType.Text,
-            CreatedAt = DateTime.UtcNow
-        };
-
-        _db.Messages.Add(message);
-        await _db.SaveChangesAsync();
-
-        await _db.ConversationMembers
-            .Where(m => m.ConversationId == conversationId && m.UserId != userId && m.LeftAt == null)
-            .ExecuteUpdateAsync(s => s.SetProperty(m => m.UnreadCount, m => m.UnreadCount + 1));
-
-        var response = new MessageResponse(
-            message.Id,
-            message.ConversationId,
-            message.SenderId ?? userId,
-            message.Sequence,
-            message.Content,
-            message.ClientMessageId,
-            message.CreatedAt,
-            message.EditedAt);
-
-        await _mediator.Publish(new MessageSentNotification(message.ConversationId, userId, response));
-
+        await db.ConversationMembers.Where(m => m.ConversationId == conversationId && m.LeftAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(m => m.HiddenAt, (DateTime?)null)
+                .SetProperty(m => m.UnreadCount, m => m.UnreadCount + (m.UserId == userId ? 0 : 1)), ct);
+        await db.Conversations.Where(c => c.Id == conversationId).ExecuteUpdateAsync(s => s
+            .SetProperty(c => c.LastMessageId, (Guid?)message.Id)
+            .SetProperty(c => c.LastMessageAt, (DateTime?)message.CreatedAt)
+            .SetProperty(c => c.UpdatedAt, message.CreatedAt), ct);
+        var response = ToResponse(message);
+        ConversationEvents.Add(db, conversationId, "ReceiveMessage", response);
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return response;
     }
 
-    public async Task DeleteMessageAsync(Guid userId, Guid messageId)
+    public async Task MarkAsReadAsync(Guid userId, Guid conversationId, long sequence, CancellationToken ct = default)
     {
-        var message = await _db.Messages
-            .FirstOrDefaultAsync(m => m.Id == messageId);
-
-        if (message is null)
-        {
-            throw AppException.NotFound("Tin nhắn không tồn tại.");
-        }
-
-        var isSender = message.SenderId == userId;
-        var isMember = await _conversationService.IsMemberAsync(userId, message.ConversationId);
-
-        if (!isSender && !isMember)
-        {
-            throw AppException.Forbidden("Bạn không có quyền xóa tin nhắn này.");
-        }
-
-        var callerRole = await _db.ConversationMembers
-            .Where(x => x.ConversationId == message.ConversationId && x.UserId == userId)
-            .Select(x => x.Role)
-            .FirstOrDefaultAsync();
-
-        var isAdminOrOwner = callerRole == MemberRole.Admin || callerRole == MemberRole.Owner;
-
-        if (isSender)
-        {
-            var now = DateTime.UtcNow;
-            var windowExceeded = message.CreatedAt.AddMinutes(15) < now;
-
-            if (windowExceeded && !isAdminOrOwner)
-            {
-                throw AppException.Forbidden("Đã quá thời gian cho phép xóa với mọi người.");
-            }
-        }
-        else if (!isAdminOrOwner)
-        {
-            throw AppException.Forbidden("Bạn không có quyền xóa tin nhắn của người khác.");
-        }
-
-        message.DeletedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await ConversationLock.AcquireAsync(db, conversationId, ct);
+        var member = await ActiveMemberAsync(userId, conversationId, ct);
+        if (sequence <= member.LastReadSequence) return;
+        var message = await MessageVisibility.Readable(db, userId, conversationId).SingleOrDefaultAsync(m => m.Sequence == sequence, ct)
+            ?? throw AppException.BadRequest("Read cursor không thuộc hội thoại.");
+        member.LastReadSequence = sequence;
+        member.LastReadMessageId = message.Id;
+        member.LastReadAt = DateTime.UtcNow;
+        member.UnreadCount = await UnreadAsync(member, ct);
+        ConversationEvents.Add(db, conversationId, "MessagesRead", new
+        { ConversationId = conversationId, UserId = userId, Sequence = sequence, ReadAt = member.LastReadAt });
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
     }
+
+    public async Task DeleteMessageAsync(Guid userId, Guid messageId, CancellationToken ct = default) =>
+        await DeleteAsync(userId, messageId, false, ct);
+
+    public async Task DeleteForMeAsync(Guid userId, Guid messageId, CancellationToken ct = default) =>
+        await DeleteAsync(userId, messageId, true, ct);
+
+    private async Task DeleteAsync(Guid userId, Guid messageId, bool forMe, CancellationToken ct)
+    {
+        var conversationId = await db.Messages.Where(m => m.Id == messageId).Select(m => (Guid?)m.ConversationId).SingleOrDefaultAsync(ct)
+            ?? throw AppException.NotFound("Tin nhắn không tồn tại.");
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await ConversationLock.AcquireAsync(db, conversationId, ct);
+        var member = forMe ? await ReadableMemberAsync(userId, conversationId, ct) : await ActiveMemberAsync(userId, conversationId, ct);
+        var message = await db.Messages.SingleAsync(m => m.Id == messageId, ct);
+        if (!await MessageVisibility.Readable(db, userId, conversationId).AnyAsync(m => m.Id == messageId, ct))
+            throw AppException.Forbidden("Không có quyền truy cập tin nhắn.");
+        if (forMe)
+        {
+            if (await db.MessageDeletions.AnyAsync(d => d.MessageId == messageId && d.UserId == userId, ct)) return;
+            db.MessageDeletions.Add(new MessageDeletion { MessageId = messageId, UserId = userId });
+            await db.SaveChangesAsync(ct);
+            member.UnreadCount = await UnreadAsync(member, ct);
+        }
+        else
+        {
+            var admin = GroupPermissionMatrix.HasPermission(member.Role, "DeleteOthersMessage");
+            if (!admin && (message.SenderId != userId || message.CreatedAt.AddMinutes(15) < DateTime.UtcNow))
+                throw AppException.Forbidden("Không có quyền thu hồi tin nhắn này.");
+            if (message.DeletedAt != null) return;
+            message.DeletedAt = DateTime.UtcNow;
+            message.Status = MessageStatus.Deleted;
+            await db.SaveChangesAsync(ct);
+            var members = await db.ConversationMembers.Where(m => m.ConversationId == conversationId && m.LeftAt == null).ToListAsync(ct);
+            foreach (var m in members) m.UnreadCount = await UnreadAsync(m, ct);
+        }
+        ConversationEvents.Add(db, conversationId, forMe ? "MessageHidden" : "MessageDeleted",
+            new { ConversationId = conversationId, MessageId = messageId }, forMe ? userId : null);
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+    }
+
+    public async Task<List<MessageStateResponse>> GetStatesAsync(Guid userId, Guid conversationId, Guid[] ids, CancellationToken ct = default)
+    {
+        if (ids.Length > 100) throw AppException.BadRequest("Tối đa 100 tin mỗi lần đồng bộ.");
+        var member = await ReadableMemberAsync(userId, conversationId, ct);
+        var query = MessageVisibility.Readable(db, userId, conversationId).Where(m => ids.Contains(m.Id));
+        return await query.Select(m => new MessageStateResponse(m.Id, m.DeletedAt != null,
+            db.MessageDeletions.Any(d => d.MessageId == m.Id && d.UserId == userId))).ToListAsync(ct);
+    }
+
+    private IQueryable<Message> VisibleMessages(ConversationMember member)
+    {
+        return MessageVisibility.Readable(db, member.UserId, member.ConversationId)
+            .Where(m => !db.MessageDeletions.Any(d => d.MessageId == m.Id && d.UserId == member.UserId));
+    }
+
+    private Task<int> UnreadAsync(ConversationMember member, CancellationToken ct) =>
+        VisibleMessages(member).CountAsync(m => m.Sequence > member.LastReadSequence && m.SenderId != member.UserId && m.DeletedAt == null, ct);
+
+    private async Task<ConversationMember> ReadableMemberAsync(Guid userId, Guid id, CancellationToken ct) =>
+        await db.ConversationMembers.SingleOrDefaultAsync(m => m.UserId == userId && m.ConversationId == id, ct)
+        ?? throw AppException.Forbidden("Không có quyền truy cập hội thoại.");
+
+    private async Task<ConversationMember> ActiveMemberAsync(Guid userId, Guid id, CancellationToken ct)
+    {
+        var member = await ReadableMemberAsync(userId, id, ct);
+        if (member.LeftAt != null || await db.Conversations.AnyAsync(c => c.Id == id && (c.ClosedAt != null || c.DeletedAt != null), ct)) throw AppException.Forbidden("Bạn đã rời hội thoại.");
+        return member;
+    }
+
+    private static MessageResponse IdempotentResponse(Message message, Guid conversationId, string content)
+    {
+        if (message.ConversationId != conversationId || message.Content != content)
+            throw AppException.Conflict("clientMessageId đã được dùng cho nội dung khác.");
+        return ToResponse(message);
+    }
+
+    public static MessageResponse ToResponse(Message m) => new(m.Id, m.ConversationId, m.SenderId ?? Guid.Empty,
+        m.Sequence, m.DeletedAt == null ? m.Content : "Tin nhắn đã được thu hồi", m.ClientMessageId,
+        m.CreatedAt, m.EditedAt, m.DeletedAt == null ? "Sent" : "Deleted");
 }

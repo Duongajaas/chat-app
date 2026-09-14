@@ -16,5 +16,7 @@ export const messagesApi = {
   send: (conversationId: string, payload: { clientMessageId: string; content?: string; attachmentObjectKey?: string }) =>
     apiClient.post<ChatMessage>(`/conversations/${conversationId}/messages`, payload).then((r) => r.data),
 
+  states: (conversationId: string, ids: string[]) => apiClient.post<Array<{ id: string; deleted: boolean; hidden: boolean }>>(`/conversations/${conversationId}/message-states`, { ids }).then(r => r.data),
+  deleteForMe: (messageId: string) => apiClient.delete(`/messages/${messageId}/for-me`),
   delete: (messageId: string) => apiClient.delete(`/messages/${messageId}`).then((r) => r.data),
 };

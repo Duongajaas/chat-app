@@ -3,6 +3,16 @@ import type { ChatMessage, Conversation } from "../types";
 import { mergeMessages } from "../utils/messageUtils";
 
 interface ChatState {
+  syncedThrough: Record<string, number>;
+  setSyncedThrough: (id: string, sequence: number) => void;
+  reset: () => void;
+  connectionStatus: "connecting" | "connected" | "disconnected";
+  setConnectionStatus: (status: "connecting" | "connected" | "disconnected") => void;
+  failMessage: (conversationId: string, clientMessageId: string) => void;
+  hideMessage: (conversationId: string, messageId: string) => void;
+  hiddenMessageIds: Record<string, boolean>;
+  deletedMessageIds: Record<string, boolean>;
+  deleteMessage: (conversationId: string, messageId: string) => void;
   conversations: Conversation[];
   activeConversationId: string | null;
   messagesByConversation: Record<string, ChatMessage[]>;
@@ -25,6 +35,27 @@ interface ChatState {
 }
 
 export const useChatStore = create<ChatState>((set) => ({
+  syncedThrough: {},
+  setSyncedThrough: (id, sequence) => set(state => ({ syncedThrough: { ...state.syncedThrough, [id]: Math.max(state.syncedThrough[id] ?? 0, sequence) } })),
+  reset: () => set({ syncedThrough: {}, conversations: [], activeConversationId: null, messagesByConversation: {},
+    hasMoreByConversation: {}, isLoadingOlderByConversation: {}, hasNewMessageBelowByConversation: {},
+    hiddenMessageIds: {}, deletedMessageIds: {}, connectionStatus: "disconnected" }),
+  connectionStatus: "disconnected",
+  setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
+  hiddenMessageIds: {},
+  deletedMessageIds: {},
+  hideMessage: (conversationId, messageId) => set(state => ({
+    hiddenMessageIds: { ...state.hiddenMessageIds, [messageId]: true },
+    messagesByConversation: { ...state.messagesByConversation, [conversationId]: (state.messagesByConversation[conversationId] ?? []).filter(m => m.id !== messageId) },
+  })),
+  deleteMessage: (conversationId, messageId) => set(state => ({
+    deletedMessageIds: { ...state.deletedMessageIds, [messageId]: true },
+    messagesByConversation: { ...state.messagesByConversation, [conversationId]: (state.messagesByConversation[conversationId] ?? []).map(m => m.id === messageId ? { ...m, status: "Deleted", content: "Tin nhắn đã được thu hồi" } : m) },
+  })),
+  failMessage: (conversationId, clientMessageId) => set(state => ({
+    messagesByConversation: { ...state.messagesByConversation, [conversationId]: (state.messagesByConversation[conversationId] ?? []).map(m =>
+      m.clientMessageId === clientMessageId && m.status === "Sending" ? { ...m, status: "Failed" } : m) },
+  })),
   conversations: [],
   activeConversationId: null,
   messagesByConversation: {},
@@ -47,7 +78,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) => ({
       messagesByConversation: {
         ...state.messagesByConversation,
-        [conversationId]: mergeMessages([], messages),
+        [conversationId]: mergeVisible(state, [], messages),
       },
     })),
 
@@ -55,7 +86,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) => ({
       messagesByConversation: {
         ...state.messagesByConversation,
-        [conversationId]: mergeMessages(state.messagesByConversation[conversationId] ?? [], older),
+        [conversationId]: mergeVisible(state, state.messagesByConversation[conversationId] ?? [], older),
       },
     })),
 
@@ -63,7 +94,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) => ({
       messagesByConversation: {
         ...state.messagesByConversation,
-        [conversationId]: mergeMessages(state.messagesByConversation[conversationId] ?? [], [message]),
+        [conversationId]: mergeVisible(state, state.messagesByConversation[conversationId] ?? [], [message]),
       },
     })),
 
@@ -71,7 +102,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) => ({
       messagesByConversation: {
         ...state.messagesByConversation,
-        [conversationId]: mergeMessages(state.messagesByConversation[conversationId] ?? [], newer),
+        [conversationId]: mergeVisible(state, state.messagesByConversation[conversationId] ?? [], newer),
       },
     })),
 
@@ -113,3 +144,8 @@ export const useChatStore = create<ChatState>((set) => ({
       hasNewMessageBelowByConversation: { ...state.hasNewMessageBelowByConversation, [conversationId]: false },
     })),
 }));
+
+function mergeVisible(state: ChatState, existing: ChatMessage[], incoming: ChatMessage[]) {
+  return mergeMessages(existing, incoming).filter(m => !state.hiddenMessageIds[m.id]).map(m =>
+    state.deletedMessageIds[m.id] ? { ...m, status: "Deleted" as const, content: "Tin nhắn đã được thu hồi" } : m);
+}

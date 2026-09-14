@@ -123,18 +123,18 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> GetDevices()
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
-        Guid userGuid = Guid.Parse(userId);
+        if (!Guid.TryParse(userId, out var userGuid)) return Unauthorized();
 
         var devices = await _authService.GetDevicesAsync(userGuid);
         return Ok(devices);
     }
 
-    [HttpDelete("devices/{deviceId}")]
+    [HttpDelete("devices/{deviceId:guid}")]
     [Authorize]
     public async Task<IActionResult> DeleteDevice(string deviceId)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
-        Guid userGuid = Guid.Parse(userId);
+        if (!Guid.TryParse(userId, out var userGuid)) return Unauthorized();
         Guid deviceGuid = Guid.Parse(deviceId);
         await _authService.RevokeDeviceAsync(userGuid, deviceGuid);
         return NoContent();
