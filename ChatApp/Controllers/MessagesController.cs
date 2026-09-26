@@ -42,7 +42,7 @@ public class MessagesController : ControllerBase
             return Unauthorized();
 
         var clientMessageId = payload.ClientMessageId ?? Guid.NewGuid();
-        var request = new SendMessageRequest(payload.Content);
+        var request = new SendMessageRequest(payload.Content, payload.MediaUrl, payload.VoiceDuration, payload.WaveformPoints);
         return Ok(await _messageService.SendMessageAsync(userId, clientMessageId, conversationId, request));
     }
 

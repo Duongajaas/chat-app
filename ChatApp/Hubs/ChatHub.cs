@@ -79,17 +79,20 @@ public class ChatHub : Hub
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, conversationId.ToString());
     }
 
-    public async Task SendMessage(Guid conversationId, string content)
+    public async Task SendMessage(Guid conversationId, string? content, string? mediaUrl = null, int? voiceDuration = null, string? waveformPoints = null)
+{
+    await EnsureConversationMembershipAsync(conversationId);
+    await Clients.Group(conversationId.ToString()).SendAsync("ReceiveMessage", new
     {
-        await EnsureConversationMembershipAsync(conversationId);
-        await Clients.Group(conversationId.ToString()).SendAsync("ReceiveMessage", new
-        {
-            ConversationId = conversationId,
-            SenderId = GetCurrentUserId(),
-            Content = content,
-            CreatedAt = DateTime.UtcNow
-        });
-    }
+        ConversationId = conversationId,
+        SenderId = GetCurrentUserId(),
+        Content = content,
+        MediaUrl = mediaUrl,
+        VoiceDuration = voiceDuration,
+        WaveformPoints = waveformPoints,
+        CreatedAt = DateTime.UtcNow
+    });
+}
 
     public async Task Typing(Guid conversationId, bool isTyping)
     {

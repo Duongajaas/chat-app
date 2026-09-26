@@ -150,8 +150,9 @@ public class ConversationService : IConversationService
         foreach (var x in raw)
         {
             var isDirect = x.Type == ConversationType.Direct;
-            var hasPeer = isDirect && directPeers.TryGetValue(x.Id, out var peer);
-            var peerUserId = hasPeer ? peer.UserId : (Guid?)null;
+var found = directPeers.TryGetValue(x.Id, out var peer);
+var hasPeer = isDirect && found;
+var peerUserId = hasPeer ? peer.UserId : (Guid?)null;
 
             result.Add(new ConversationSummaryResponse(
                 x.Id,
