@@ -9,7 +9,6 @@ public class FileUploadService : IFileUploadService
 {
     private readonly IConfiguration _config;
 
-    // Chỉ nhận cấu hình, không khởi tạo Cloudinary ở đây để tránh lỗi vòng ngoài
     public FileUploadService(IConfiguration config)
     {
         _config = config;
@@ -17,14 +16,14 @@ public class FileUploadService : IFileUploadService
 
     public async Task<ImageUploadResult> UploadImageAsync(IFormFile file)
     {
-        var cloudName = _config["Cloudinary:CloudName"];
-        var apiKey = _config["Cloudinary:ApiKey"];
-        var apiSecret = _config["Cloudinary:ApiSecret"];
+        // Hàm Trim() sẽ gọt sạch mọi dấu cách/enter tàng hình sinh ra lúc dán file .env
+        var cloudName = _config["Cloudinary:CloudName"]?.Trim();
+        var apiKey = _config["Cloudinary:ApiKey"]?.Trim();
+        var apiSecret = _config["Cloudinary:ApiSecret"]?.Trim();
 
-        // Bắt lỗi ngay nếu cấu hình bị trống
-        if (string.IsNullOrEmpty(cloudName) || string.IsNullOrEmpty(apiKey))
+        if (string.IsNullOrEmpty(cloudName) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiSecret))
         {
-            throw new Exception($"Lỗi cấu hình: CloudName='{cloudName}', ApiKey='{apiKey}'. Vui lòng kiểm tra lại file appsettings.json hoặc .env");
+            throw new Exception("Lỗi thiếu Key Cloudinary trong cấu hình!");
         }
 
         var acc = new Account(cloudName, apiKey, apiSecret);

@@ -247,7 +247,7 @@ builder.Services.AddRateLimiter(options =>
 var app = builder.Build();
 
 // ---------- Global exception handling ----------
-
+/* 
 app.Use(async (context, next) =>
 {
     try
@@ -267,7 +267,7 @@ app.Use(async (context, next) =>
         await context.Response.WriteAsJsonAsync(new { message = "Đã có lỗi xảy ra, vui lòng thử lại sau." });
     }
 });
-
+*/
 
 if (app.Environment.IsDevelopment())
 {
