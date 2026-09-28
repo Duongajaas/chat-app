@@ -107,7 +107,7 @@ public class ConversationService(AppDbContext db) : IConversationService
                 last == null ? null : last.DeletedAt != null ? "Tin nhắn đã được thu hồi" : last.Content,
                 active && member.Role is MemberRole.Admin or MemberRole.Owner, member.HiddenAt != null, member.LeftAt != null,
                 active ? member.Role : null, active && c.Type == ConversationType.Group ? GroupPermissionMatrix.Permissions(member.Role) : [],
-                active ? counts.GetValueOrDefault(c.Id) : 0, c.Version, c.ClosedAt);
+                active ? counts.GetValueOrDefault(c.Id) : 0, c.Version, c.ClosedAt, c.AvatarUrl);
         }).ToList();
     }
 

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ChatApp.Common;
 using ChatApp.Data;
 using ChatApp.DTOs;
@@ -29,34 +30,77 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
         var peerRead = await db.ConversationMembers.Where(m => m.ConversationId == conversationId && m.UserId != userId)
             .Select(m => (long?)m.LastReadSequence).MaxAsync(ct) ?? 0;
         if (!await db.DirectConversations.AnyAsync(d => d.ConversationId == conversationId, ct)) peerRead = 0;
-        return new MessageListResponse(page.Select(ToResponse).ToList(), cursor, more, peerRead);
+        return new MessageListResponse(await new MessageReader(db).BuildAsync(userId, conversationId, page, ct), cursor, more, peerRead);
     }
 
-    public async Task<MessageResponse> SendMessageAsync(Guid userId, Guid clientMessageId, Guid conversationId,
-        SendMessageRequest request, CancellationToken ct = default)
+    public Task<MessageResponse> SendMessageAsync(Guid userId, Guid clientMessageId, Guid conversationId,
+        SendMessageRequest request, CancellationToken ct = default) =>
+        CreateAsync(userId, clientMessageId, conversationId, request, null, ct);
+
+    public Task<MessageResponse> ForwardAsync(Guid userId, Guid sourceId, Guid targetId, Guid clientMessageId, CancellationToken ct = default) =>
+        CreateAsync(userId, clientMessageId, targetId, new(null), sourceId, ct);
+
+    private async Task<MessageResponse> CreateAsync(Guid userId, Guid clientMessageId, Guid conversationId,
+        SendMessageRequest request, Guid? sourceId, CancellationToken ct)
     {
         if (clientMessageId == Guid.Empty) throw AppException.BadRequest("clientMessageId là bắt buộc.");
-        var content = request.Content?.Trim();
-        if (string.IsNullOrEmpty(content) || content.Length > 4000)
-            throw AppException.BadRequest("Tin nhắn phải có từ 1 đến 4000 ký tự.");
+        if (request.Mentions?.Length > 20) throw AppException.BadRequest("Tối đa 20 vị trí mention.");
+        var requestHash = MessageReconciliation.Hash(conversationId, request, sourceId);
+        var sourceConversation = sourceId == null ? null : await db.Messages.Where(m => m.Id == sourceId)
+            .Select(m => (Guid?)m.ConversationId).SingleOrDefaultAsync(ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
-        await ConversationLock.AcquireAsync(db, conversationId, ct);
+        // Two-conversation operations always acquire locks in the same order.
+        foreach (var id in new[] { conversationId, sourceConversation ?? conversationId }.Distinct().Order())
+            await ConversationLock.AcquireAsync(db, id, ct);
+        var existing = await db.Messages.AsNoTracking().SingleOrDefaultAsync(m => m.SenderId == userId && m.ClientMessageId == clientMessageId, ct);
+        if (existing != null)
+        {
+            CheckRetry(existing, conversationId, requestHash, request.Content, sourceId);
+            return await new MessageReconciliation(db).ExistingResponseAsync(userId, existing, ct);
+        }
         await ActiveMemberAsync(userId, conversationId, ct);
         var direct = await db.DirectConversations.SingleOrDefaultAsync(d => d.ConversationId == conversationId, ct);
         if (direct != null && await blocks.IsBlockedEitherWayAsync(direct.UserLowId, direct.UserHighId))
             throw AppException.Forbidden("Không thể gửi tin nhắn.");
-        var existing = await db.Messages.AsNoTracking().SingleOrDefaultAsync(m => m.SenderId == userId && m.ClientMessageId == clientMessageId, ct);
-        if (existing != null) return IdempotentResponse(existing, conversationId, content);
-        var message = new Message { ConversationId = conversationId, SenderId = userId, ClientMessageId = clientMessageId, Content = content };
+        Message? source = null;
+        var content = request.Content ?? "";
+        if (sourceId != null)
+        {
+            if (sourceConversation == null) throw AppException.NotFound("Tin nhắn nguồn không khả dụng.");
+            await new MessageReader(db).EnsureMembershipAsync(userId, sourceConversation.Value, ct);
+            source = await new MessageReader(db).Visible(userId, sourceConversation.Value)
+                .SingleOrDefaultAsync(m => m.Id == sourceId && m.DeletedAt == null, ct)
+                ?? throw AppException.NotFound("Tin nhắn nguồn không khả dụng.");
+            var sourceDirect = await db.DirectConversations.SingleOrDefaultAsync(d => d.ConversationId == sourceConversation, ct);
+            if (sourceDirect != null && await blocks.IsBlockedEitherWayAsync(sourceDirect.UserLowId, sourceDirect.UserHighId))
+                throw AppException.Forbidden("Không thể chuyển tiếp từ hội thoại bị chặn.");
+            content = source.Content ?? "";
+        }
+        else if (string.IsNullOrWhiteSpace(content) || content.Length > 4000)
+            throw AppException.BadRequest("Tin nhắn phải có từ 1 đến 4000 ký tự.");
+        if (request.ReplyToMessageId is Guid replyId &&
+            !await new MessageReader(db).Visible(userId, conversationId).AnyAsync(m => m.Id == replyId && m.DeletedAt == null, ct))
+            throw AppException.BadRequest("Tin nhắn được trả lời không khả dụng trong hội thoại.");
+        var message = new Message { ConversationId = conversationId, SenderId = userId, ClientMessageId = clientMessageId,
+            Content = content, ReplyToMessageId = request.ReplyToMessageId, ForwardedFromMessageId = source?.Id,
+            IsForwarded = source != null, RequestHash = requestHash, Type = source?.Type ?? MessageType.Text };
         db.Messages.Add(message);
+        if (source == null) await AddMentionsAsync(message, request.Mentions ?? [], ct);
+        if (source != null)
+        {
+            var attachments = await db.MessageAttachments.AsNoTracking().Where(a => a.MessageId == source.Id).ToListAsync(ct);
+            db.MessageAttachments.AddRange(attachments.Select(a => new MessageAttachment { MessageId = message.Id,
+                StorageKey = a.StorageKey, FileName = a.FileName, FileType = a.FileType, FileSize = a.FileSize,
+                Width = a.Width, Height = a.Height, DurationSeconds = a.DurationSeconds, ThumbnailKey = a.ThumbnailKey, Metadata = a.Metadata }));
+        }
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation,
             ConstraintName: "ix_messages_sender_id_client_message_id" })
         {
-            await tx.RollbackAsync(ct);
-            db.ChangeTracker.Clear();
+            await tx.RollbackAsync(ct); db.ChangeTracker.Clear();
             var winner = await db.Messages.AsNoTracking().SingleAsync(m => m.SenderId == userId && m.ClientMessageId == clientMessageId, ct);
-            return IdempotentResponse(winner, conversationId, content);
+            CheckRetry(winner, conversationId, requestHash, request.Content, sourceId);
+            return await new MessageReconciliation(db).ExistingResponseAsync(userId, winner, ct);
         }
         await db.ConversationMembers.Where(m => m.ConversationId == conversationId && m.LeftAt == null)
             .ExecuteUpdateAsync(s => s.SetProperty(m => m.HiddenAt, (DateTime?)null)
@@ -65,11 +109,54 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
             .SetProperty(c => c.LastMessageId, (Guid?)message.Id)
             .SetProperty(c => c.LastMessageAt, (DateTime?)message.CreatedAt)
             .SetProperty(c => c.UpdatedAt, message.CreatedAt), ct);
-        var response = ToResponse(message);
-        ConversationEvents.Add(db, conversationId, "ReceiveMessage", response);
+        // Plain messages retain the compatible event; richer messages contain no shared quote/attachment payload.
+        if (message.ReplyToMessageId != null || message.IsForwarded || (request.Mentions?.Length ?? 0) > 0)
+            ConversationEvents.Add(db, conversationId, "MessageAvailable", new { ConversationId = conversationId, MessageId = message.Id, message.Sequence });
+        else ConversationEvents.Add(db, conversationId, "ReceiveMessage", ToResponse(message));
+        var mentions = await db.MessageMentions.Where(m => m.MessageId == message.Id).ToListAsync(ct);
+        foreach (var mention in mentions)
+        {
+            db.Notifications.Add(new Notification { UserId = mention.MentionedUserId, Type = "mention",
+                Title = "Bạn được nhắc đến", Data = JsonSerializer.Serialize(new { conversationId, messageId = message.Id }) });
+            ConversationEvents.Add(db, conversationId, "MentionReceived",
+                new { ConversationId = conversationId, MessageId = message.Id, message.Sequence }, mention.MentionedUserId);
+        }
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
-        return response;
+        return await new MessageReconciliation(db).ExistingResponseAsync(userId, message, ct);
+    }
+
+    private async Task AddMentionsAsync(Message message, MentionInput[] inputs, CancellationToken ct)
+    {
+        if (inputs.Length == 0) return;
+        if (!await db.Conversations.AnyAsync(c => c.Id == message.ConversationId && c.Type == ConversationType.Group, ct))
+            throw AppException.BadRequest("Mention chỉ áp dụng trong nhóm.");
+        var ids = inputs.Select(i => i.UserId).Distinct().ToArray();
+        var users = await (from m in db.ConversationMembers join u in db.Users on m.UserId equals u.Id
+            where m.ConversationId == message.ConversationId && m.LeftAt == null && ids.Contains(u.Id) && u.IsActive && u.DeletedAt == null
+            select new { u.Id, u.Username }).ToDictionaryAsync(u => u.Id, ct);
+        var seen = new HashSet<Guid>(); var end = 0;
+        foreach (var input in inputs.OrderBy(i => i.Start))
+        {
+            if (input.Start < end || input.Start < 0 || input.Length < 2 ||
+                input.Start > message.Content!.Length - input.Length)
+                throw AppException.BadRequest("Vị trí mention không hợp lệ.");
+            end = input.Start + input.Length;
+            if (input.UserId == message.SenderId || !users.TryGetValue(input.UserId, out var target)) continue;
+            if (!string.Equals(message.Content.Substring(input.Start, input.Length), "@" + target.Username, StringComparison.OrdinalIgnoreCase))
+                throw AppException.BadRequest("Mention không khớp username.");
+            if (!seen.Add(input.UserId)) continue;
+            if (seen.Count > 10) throw AppException.BadRequest("Tối đa 10 người được mention trong một tin.");
+            db.MessageMentions.Add(new MessageMention { MessageId = message.Id, MentionedUserId = input.UserId,
+                Username = target.Username, Start = input.Start, Length = input.Length });
+        }
+    }
+
+    private static void CheckRetry(Message message, Guid conversation, string hash, string? content, Guid? source)
+    {
+        if (message.ConversationId != conversation || (message.RequestHash != null ? message.RequestHash != hash :
+            source != null || message.Content != content?.Trim()))
+            throw AppException.Conflict("clientMessageId đã dùng cho yêu cầu khác.");
     }
 
     public async Task MarkAsReadAsync(Guid userId, Guid conversationId, long sequence, CancellationToken ct = default)
@@ -121,6 +208,13 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
             if (message.DeletedAt != null) return;
             message.DeletedAt = DateTime.UtcNow;
             message.Status = MessageStatus.Deleted;
+            var pinsRemoved = await db.PinnedMessages.Where(p => p.MessageId == messageId).ExecuteDeleteAsync(ct);
+            if (pinsRemoved > 0)
+            {
+                var conversation = await db.Conversations.SingleAsync(c => c.Id == conversationId, ct);
+                new GroupService(db).Changed(conversation, userId, "UNPIN_RECALLED_MESSAGE", metadata: new { messageId });
+                ConversationEvents.Add(db, conversationId, "PinsChanged", new { ConversationId = conversationId, conversation.Version });
+            }
             await db.SaveChangesAsync(ct);
             var members = await db.ConversationMembers.Where(m => m.ConversationId == conversationId && m.LeftAt == null).ToListAsync(ct);
             foreach (var m in members) m.UnreadCount = await UnreadAsync(m, ct);
@@ -158,13 +252,6 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
         var member = await ReadableMemberAsync(userId, id, ct);
         if (member.LeftAt != null || await db.Conversations.AnyAsync(c => c.Id == id && (c.ClosedAt != null || c.DeletedAt != null), ct)) throw AppException.Forbidden("Bạn đã rời hội thoại.");
         return member;
-    }
-
-    private static MessageResponse IdempotentResponse(Message message, Guid conversationId, string content)
-    {
-        if (message.ConversationId != conversationId || message.Content != content)
-            throw AppException.Conflict("clientMessageId đã được dùng cho nội dung khác.");
-        return ToResponse(message);
     }
 
     public static MessageResponse ToResponse(Message m) => new(m.Id, m.ConversationId, m.SenderId ?? Guid.Empty,

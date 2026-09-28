@@ -42,6 +42,14 @@ public class BlockService : IBlockService
             return;
         }
 
+        var cooldown = await _db.BlockCooldowns.AsNoTracking().SingleOrDefaultAsync(c => c.ActorId == blockerId && c.TargetId == targetUserId);
+        if (cooldown?.ReblockAllowedAt > now)
+        {
+            var seconds = (int)Math.Ceiling((cooldown.ReblockAllowedAt - now).TotalSeconds);
+            throw new AppException($"Bạn cần chờ thêm {seconds / 60} phút {seconds % 60} giây mới được chặn lại.", 409)
+            { Code = "REBLOCK_COOLDOWN", ReblockAllowedAt = cooldown.ReblockAllowedAt, RemainingSeconds = seconds };
+        }
+
         var lowId = blockerId.CompareTo(targetUserId) < 0 ? blockerId : targetUserId;
         var highId = blockerId.CompareTo(targetUserId) < 0 ? targetUserId : blockerId;
 
@@ -65,6 +73,11 @@ public class BlockService : IBlockService
                 .SetProperty(request => request.Status, FriendRequestStatus.Rejected)
                 .SetProperty(request => request.RespondedAt, (DateTime?)now));
 
+        if (directId.HasValue)
+        {
+            await _db.Conversations.Where(c => c.Id == directId.Value).ExecuteUpdateAsync(s => s.SetProperty(c => c.Version, c => c.Version + 1));
+            ConversationEvents.Add(_db, directId.Value, "ConversationChanged", new { ConversationId = directId.Value });
+        }
         ConversationEvents.Add(_db, directId ?? Guid.Empty, "PresenceInvalidated", new { UserId = targetUserId }, blockerId);
         ConversationEvents.Add(_db, directId ?? Guid.Empty, "PresenceInvalidated", new { UserId = blockerId }, targetUserId);
         await _db.SaveChangesAsync();
@@ -78,10 +91,21 @@ public class BlockService : IBlockService
         var block = await _db.Blocks.FirstOrDefaultAsync(item =>
             item.BlockerId == blockerId && item.BlockedId == targetUserId);
 
-        if (block is null)
-            throw AppException.NotFound("Người dùng không nằm trong danh sách đã chặn.");
-
+        if (block is null) { await transaction.CommitAsync(); return; }
+        var directId = await _db.DirectConversations.Where(d =>
+            (d.UserLowId == blockerId && d.UserHighId == targetUserId) ||
+            (d.UserHighId == blockerId && d.UserLowId == targetUserId)).Select(d => (Guid?)d.ConversationId).SingleOrDefaultAsync();
+        if (directId.HasValue) await ConversationLock.AcquireAsync(_db, directId.Value);
+        var now = DateTime.UtcNow;
+        var cooldown = await _db.BlockCooldowns.SingleOrDefaultAsync(c => c.ActorId == blockerId && c.TargetId == targetUserId);
+        if (cooldown == null) { cooldown = new BlockCooldown { ActorId = blockerId, TargetId = targetUserId }; _db.BlockCooldowns.Add(cooldown); }
+        cooldown.LastUnblockedAt = now; cooldown.ReblockAllowedAt = now.AddHours(1);
         _db.Blocks.Remove(block);
+        if (directId.HasValue)
+        {
+            await _db.Conversations.Where(c => c.Id == directId.Value).ExecuteUpdateAsync(s => s.SetProperty(c => c.Version, c => c.Version + 1));
+            ConversationEvents.Add(_db, directId.Value, "ConversationChanged", new { ConversationId = directId.Value });
+        }
         ConversationEvents.Add(_db, Guid.Empty, "PresenceInvalidated", new { UserId = targetUserId }, blockerId);
         ConversationEvents.Add(_db, Guid.Empty, "PresenceInvalidated", new { UserId = blockerId }, targetUserId);
         await _db.SaveChangesAsync();
@@ -97,18 +121,41 @@ public class BlockService : IBlockService
 
     public async Task<List<BlockedUserResponse>> GetBlockedUsersAsync(Guid userId)
     {
-        return await _db.Blocks
-            .Where(block => block.BlockerId == userId)
-            .Join(_db.Users.Where(user => user.DeletedAt == null),
-                block => block.BlockedId,
-                user => user.Id,
-                (block, user) => new BlockedUserResponse(
-                    user.Id,
-                    user.Username,
-                    user.FullName,
-                    user.AvatarUrl,
-                    block.CreatedAt))
-            .OrderByDescending(user => user.BlockedAt)
-            .ToListAsync();
+        var result = await _db.Blocks
+        .Where(block => block.BlockerId == userId)
+        .Join(
+            _db.Users.Where(user => user.DeletedAt == null),
+            block => block.BlockedId,
+            user => user.Id,
+            (block, user) => new
+            {
+                User = user,
+                BlockedAt = block.CreatedAt
+            })
+        .OrderByDescending(x => x.BlockedAt)
+        .Select(x => new BlockedUserResponse(
+            x.User.Id,
+            x.User.Username,
+            x.User.FullName,
+            x.User.AvatarUrl,
+            x.BlockedAt
+        ))
+        .ToListAsync();
+
+        return result;
+
+        // return await _db.Blocks
+        //     .Where(block => block.BlockerId == userId)
+        //     .Join(_db.Users.Where(user => user.DeletedAt == null),
+        //         block => block.BlockedId,
+        //         user => user.Id,
+        //         (block, user) => new BlockedUserResponse(
+        //             user.Id,
+        //             user.Username,
+        //             user.FullName,
+        //             user.AvatarUrl,
+        //             block.CreatedAt))
+        //     .OrderByDescending(user => user.BlockedAt)
+        //     .ToListAsync();
     }
 }
