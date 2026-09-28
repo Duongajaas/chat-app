@@ -51,10 +51,18 @@ public record CreateConversationRequest(
 );
 
 public record SendMessageRequest(
-    string? Content
+    string? Content,
+    string? MediaUrl,
+    int? VoiceDuration,
+    string? WaveformPoints
 );
 
 public record SendMessagePayload(
+    Guid? ClientMessageId,
+    string? Content,
+    string? MediaUrl,
+    int? VoiceDuration,
+    string? WaveformPoints
     [Required] Guid? ClientMessageId,
     [Required, StringLength(4000)] string? Content
 );

@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: chatapp-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: chatappdb
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:alpine
+    container_name: chatapp-redis
+    restart: always
+    ports:
+      - "6379:6379"

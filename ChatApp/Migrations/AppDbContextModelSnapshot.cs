@@ -633,6 +633,10 @@ namespace ChatApp.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("forwarded_from_message_id");
 
+                    b.Property<string>("MediaUrl")
+                        .HasColumnType("text")
+                        .HasColumnName("media_url");
+
                     b.Property<Guid?>("ReplyToMessageId")
                         .HasColumnType("uuid")
                         .HasColumnName("reply_to_message_id");
@@ -655,6 +659,14 @@ namespace ChatApp.Migrations
                     b.Property<int>("Type")
                         .HasColumnType("integer")
                         .HasColumnName("type");
+
+                    b.Property<int?>("VoiceDuration")
+                        .HasColumnType("integer")
+                        .HasColumnName("voice_duration");
+
+                    b.Property<string>("WaveformPoints")
+                        .HasColumnType("text")
+                        .HasColumnName("waveform_points");
 
                     b.HasKey("Id")
                         .HasName("pk_messages");
