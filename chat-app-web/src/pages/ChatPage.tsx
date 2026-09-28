@@ -137,22 +137,27 @@ export default function ChatPage() {
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
   const activeMessages = activeConversationId ? messagesByConversation[activeConversationId] ?? [] : [];
 
-  async function handleSend(content: string, retry?: ChatMessage, features?: { replyToMessageId?: string; mentions?: import("../utils/mentions").MentionInput[] }) {
+  async function handleSend(content: string, retry?: ChatMessage, features?: { replyToMessageId?: string; mentions?: import("../utils/mentions").MentionInput[];
+    mediaUrl?: string | null; voiceDuration?: number | null; waveformPoints?: string | null }) {
     const id = retry?.conversationId ?? activeConversationId;
     if (!id || !user) return;
     const version = getSessionVersion();
     const replyToMessageId = retry?.replyToMessageId ?? features?.replyToMessageId;
     const mentions = retry?.pendingMentions ?? features?.mentions ?? [];
+    const mediaUrl = retry?.mediaUrl ?? features?.mediaUrl;
+    const voiceDuration = retry?.voiceDuration ?? features?.voiceDuration;
+    const waveformPoints = retry?.waveformPoints ?? features?.waveformPoints;
     const clientMessageId = retry?.clientMessageId ?? crypto.randomUUID();
     appendMessage(id, {
       id: clientMessageId, conversationId: id, senderId: user.id, sequence: Number.MAX_VALUE,
-      content, replyToMessageId, pendingMentions: mentions, pendingSourceMessageId: retry?.pendingSourceMessageId, createdAt: retry?.createdAt ?? new Date().toISOString(), clientMessageId, status: "Sending",
+      content, replyToMessageId, pendingMentions: mentions, mediaUrl, voiceDuration, waveformPoints,
+      pendingSourceMessageId: retry?.pendingSourceMessageId, createdAt: retry?.createdAt ?? new Date().toISOString(), clientMessageId, status: "Sending",
     });
     try {
       messageDelivery.enqueue({ accountId: user.id, session: version, conversationId: id,
         payload: retry?.pendingSourceMessageId
           ? { clientMessageId, sourceMessageId: retry.pendingSourceMessageId }
-          : { clientMessageId, content, replyToMessageId, mentions } }, !!retry);
+          : { clientMessageId, content, replyToMessageId, mentions, mediaUrl, voiceDuration, waveformPoints } }, !!retry);
     } catch (error) {
       useChatStore.getState().updateMessage(id, clientMessageId, { status: "Failed",
         deliveryError: error instanceof Error ? error.message : "Không thể thêm tin vào hàng đợi." });

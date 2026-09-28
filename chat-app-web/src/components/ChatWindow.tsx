@@ -20,7 +20,8 @@ import { useAutoScrollToBottom } from "../hooks/useAutoScrollToBottom";
 interface ChatWindowProps {
   conversation: Conversation | null;
   messages: ChatMessage[];
-  onSendMessage: (content: string, features?: { replyToMessageId?: string; mentions?: MentionInput[] }) => void;
+  onSendMessage: (content: string, features?: { replyToMessageId?: string; mentions?: MentionInput[];
+    mediaUrl?: string | null; voiceDuration?: number | null; waveformPoints?: string | null }) => void;
   onDeleteMessage: (messageId: string) => Promise<void>;
   onDeleteForMe: (messageId: string) => Promise<void>;
   onRetryMessage: (message: ChatMessage) => void;
@@ -356,7 +357,12 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
                 if (m.replyPreview?.isAvailable) void openReference({ ...m, id: m.replyPreview.id, sequence: m.replyPreview.sequence ?? 0 });
               }}>{m.replyPreview.isAvailable ? `${m.replyPreview.senderName ?? "Người dùng"}: ${m.replyPreview.contentSnippet ?? ""}` : "Tin nhắn gốc không khả dụng"}</button>}
               {m.attachments?.map(a => <small key={a.id}>Tệp đính kèm: {a.fileName ?? "Tệp"}</small>)}
-              {m.status === "Deleted" ? <p className="message-bubble__deleted">Tin nhắn đã được thu hồi</p> : <p><MessageText content={m.content} mentions={m.mentions} /></p>}
+              {m.status === "Deleted" ? <p className="message-bubble__deleted">Tin nhắn đã được thu hồi</p> : <>
+                {m.content && <p><MessageText content={m.content} mentions={m.mentions} /></p>}
+                {m.mediaUrl?.startsWith("https://") && (m.voiceDuration != null
+                  ? <audio controls preload="none" src={m.mediaUrl} aria-label={`Tin nhắn thoại ${m.voiceDuration} giây`} />
+                  : <a href={m.mediaUrl} target="_blank" rel="noopener noreferrer">Mở media</a>)}
+              </>}
               <span className="message-bubble__time">
                 {new Date(m.createdAt).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}
                 {m.status === "Sending" && <small role="status">{m.deliveryState === "RetryWaiting" || m.deliveryState === "Queued"

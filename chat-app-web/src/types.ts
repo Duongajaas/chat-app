@@ -94,6 +94,9 @@ export interface ChatMessage {
   isForwarded?: boolean;
   mentions?: import("./utils/mentions").Mention[];
   pendingMentions?: import("./utils/mentions").MentionInput[];
+  mediaUrl?: string | null;
+  voiceDuration?: number | null;
+  waveformPoints?: string | null;
   attachments?: { id: string; fileName: string | null; fileType: string | null; fileSize: number | null }[];
   id: string;
   conversationId: string;

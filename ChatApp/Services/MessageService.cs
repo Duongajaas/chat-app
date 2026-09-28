@@ -46,6 +46,23 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
         if (clientMessageId == Guid.Empty) throw AppException.BadRequest("clientMessageId là bắt buộc.");
         if (request.Mentions?.Length > 20) throw AppException.BadRequest("Tối đa 20 vị trí mention.");
         var requestHash = MessageReconciliation.Hash(conversationId, request, sourceId);
+        if (sourceId == null)
+        {
+            if (request.Content?.Length > 4000) throw AppException.BadRequest("Tin nhắn tối đa 4000 ký tự.");
+            if (request.MediaUrl == null)
+            {
+                if (string.IsNullOrWhiteSpace(request.Content)) throw AppException.BadRequest("Tin nhắn cần nội dung hoặc media.");
+                if (request.VoiceDuration != null || request.WaveformPoints != null)
+                    throw AppException.BadRequest("Thông tin voice cần mediaUrl.");
+            }
+            else if (request.MediaUrl.Length > 2048 || !Uri.TryCreate(request.MediaUrl, UriKind.Absolute, out var mediaUri) ||
+                mediaUri.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(mediaUri.UserInfo))
+                throw AppException.BadRequest("mediaUrl phải là URL HTTPS hợp lệ.");
+            if (request.VoiceDuration is <= 0 or > 3600 || request.WaveformPoints?.Length > 2000)
+                throw AppException.BadRequest("Thông tin voice không hợp lệ.");
+            if (request.WaveformPoints != null && request.VoiceDuration == null)
+                throw AppException.BadRequest("waveformPoints cần voiceDuration.");
+        }
         var sourceConversation = sourceId == null ? null : await db.Messages.Where(m => m.Id == sourceId)
             .Select(m => (Guid?)m.ConversationId).SingleOrDefaultAsync(ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -76,14 +93,18 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
                 throw AppException.Forbidden("Không thể chuyển tiếp từ hội thoại bị chặn.");
             content = source.Content ?? "";
         }
-        else if (string.IsNullOrWhiteSpace(content) || content.Length > 4000)
-            throw AppException.BadRequest("Tin nhắn phải có từ 1 đến 4000 ký tự.");
+        else if (string.IsNullOrWhiteSpace(content) && request.MediaUrl == null)
+            throw AppException.BadRequest("Tin nhắn cần nội dung hoặc media.");
         if (request.ReplyToMessageId is Guid replyId &&
             !await new MessageReader(db).Visible(userId, conversationId).AnyAsync(m => m.Id == replyId && m.DeletedAt == null, ct))
             throw AppException.BadRequest("Tin nhắn được trả lời không khả dụng trong hội thoại.");
         var message = new Message { ConversationId = conversationId, SenderId = userId, ClientMessageId = clientMessageId,
             Content = content, ReplyToMessageId = request.ReplyToMessageId, ForwardedFromMessageId = source?.Id,
-            IsForwarded = source != null, RequestHash = requestHash, Type = source?.Type ?? MessageType.Text };
+            IsForwarded = source != null, RequestHash = requestHash,
+            Type = source?.Type ?? (request.VoiceDuration != null ? MessageType.Audio : request.MediaUrl != null ? MessageType.File : MessageType.Text),
+            MediaUrl = source?.MediaUrl ?? request.MediaUrl,
+            VoiceDuration = source?.VoiceDuration ?? request.VoiceDuration,
+            WaveformPoints = source?.WaveformPoints ?? request.WaveformPoints };
         db.Messages.Add(message);
         if (source == null) await AddMentionsAsync(message, request.Mentions ?? [], ct);
         if (source != null)
@@ -110,7 +131,7 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
             .SetProperty(c => c.LastMessageAt, (DateTime?)message.CreatedAt)
             .SetProperty(c => c.UpdatedAt, message.CreatedAt), ct);
         // Plain messages retain the compatible event; richer messages contain no shared quote/attachment payload.
-        if (message.ReplyToMessageId != null || message.IsForwarded || (request.Mentions?.Length ?? 0) > 0)
+        if (message.ReplyToMessageId != null || message.IsForwarded || message.MediaUrl != null || (request.Mentions?.Length ?? 0) > 0)
             ConversationEvents.Add(db, conversationId, "MessageAvailable", new { ConversationId = conversationId, MessageId = message.Id, message.Sequence });
         else ConversationEvents.Add(db, conversationId, "ReceiveMessage", ToResponse(message));
         var mentions = await db.MessageMentions.Where(m => m.MessageId == message.Id).ToListAsync(ct);
@@ -256,5 +277,8 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
 
     public static MessageResponse ToResponse(Message m) => new(m.Id, m.ConversationId, m.SenderId ?? Guid.Empty,
         m.Sequence, m.DeletedAt == null ? m.Content : "Tin nhắn đã được thu hồi", m.ClientMessageId,
-        m.CreatedAt, m.EditedAt, m.DeletedAt == null ? "Sent" : "Deleted");
+        m.CreatedAt, m.EditedAt, m.DeletedAt == null ? "Sent" : "Deleted",
+        MediaUrl: m.DeletedAt == null ? m.MediaUrl : null,
+        VoiceDuration: m.DeletedAt == null ? m.VoiceDuration : null,
+        WaveformPoints: m.DeletedAt == null ? m.WaveformPoints : null);
 }

@@ -40,7 +40,10 @@ public record MessageResponse(
     ReplyPreviewResponse? ReplyPreview = null,
     bool IsForwarded = false,
     MentionResponse[]? Mentions = null,
-    AttachmentResponse[]? Attachments = null
+    AttachmentResponse[]? Attachments = null,
+    string? MediaUrl = null,
+    int? VoiceDuration = null,
+    string? WaveformPoints = null
 );
 
 public record MessageListResponse(
@@ -59,22 +62,20 @@ public record CreateConversationRequest(
 public record SendMessageRequest(
     string? Content,
     Guid? ReplyToMessageId = null,
-    MentionInput[]? Mentions = null
-    string? MediaUrl,
-    int? VoiceDuration,
-    string? WaveformPoints
+    MentionInput[]? Mentions = null,
+    string? MediaUrl = null,
+    int? VoiceDuration = null,
+    string? WaveformPoints = null
 );
 
 public record SendMessagePayload(
-    Guid? ClientMessageId,
-    string? Content,
-    string? MediaUrl,
-    int? VoiceDuration,
-    string? WaveformPoints
     [Required] Guid? ClientMessageId,
-    [Required, StringLength(4000)] string? Content,
+    [StringLength(4000)] string? Content,
     Guid? ReplyToMessageId = null,
-    [MaxLength(20)] MentionInput[]? Mentions = null
+    [MaxLength(20)] MentionInput[]? Mentions = null,
+    string? MediaUrl = null,
+    int? VoiceDuration = null,
+    string? WaveformPoints = null
 );
 
 public record MessageStateResponse(Guid Id, bool Deleted, bool Hidden);

@@ -996,3 +996,6 @@ input:focus-visible, select:focus-visible {  }
 .create-group-chips button, .group-settings--details > header button { display: inline-flex; align-items: center; justify-content: center; }
 .auth-footer-text svg { vertical-align: middle; margin-left: 4px; }
 @media (max-width: 900px) { .profile-back-link, .friend-link-card .profile-back-link { min-height: 38px; } }
+
+.message-bubble audio { display: block; width: min(280px, 100%); max-width: 100%; margin-top: 8px; }
+.message-bubble a[href^="https://"] { overflow-wrap: anywhere; }
