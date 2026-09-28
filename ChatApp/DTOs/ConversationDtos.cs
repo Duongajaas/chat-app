@@ -60,9 +60,17 @@ public record SendMessageRequest(
     string? Content,
     Guid? ReplyToMessageId = null,
     MentionInput[]? Mentions = null
+    string? MediaUrl,
+    int? VoiceDuration,
+    string? WaveformPoints
 );
 
 public record SendMessagePayload(
+    Guid? ClientMessageId,
+    string? Content,
+    string? MediaUrl,
+    int? VoiceDuration,
+    string? WaveformPoints
     [Required] Guid? ClientMessageId,
     [Required, StringLength(4000)] string? Content,
     Guid? ReplyToMessageId = null,

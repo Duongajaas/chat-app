@@ -39,7 +39,7 @@ builder.Services.Configure<GoogleAuthOptions>(builder.Configuration.GetSection(G
 builder.Services.Configure<AccountLockoutOptions>(builder.Configuration.GetSection(AccountLockoutOptions.SectionName));
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection(SmtpOptions.SectionName));
 builder.Services.Configure<AppUrlsOptions>(builder.Configuration.GetSection(AppUrlsOptions.SectionName));
-
+builder.Services.AddScoped<IFileUploadService, FileUploadService>();
 var rateLimitOptions = builder.Configuration
     .GetSection(RateLimitingOptions.SectionName)
     .Get<RateLimitingOptions>() ?? new RateLimitingOptions();
@@ -78,7 +78,7 @@ builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(Progr
 // Production: đổi origin sang domain thật của frontend đã deploy.
 var frontendOrigins = builder.Configuration
     .GetSection("Cors:AllowedOrigins")
-    .Get<string[]>() ?? new[] { "http://localhost:5173" };
+    .Get<string[]>() ?? new[] { "http://localhost:5173", "http://localhost:5000" };
 
 if (builder.Environment.IsProduction())
 {
@@ -296,6 +296,7 @@ if (runtimeRole == "worker")
 app.UseForwardedHeaders();
 
 // ---------- Global exception handling ----------
+/* 
 app.Use(async (context, next) =>
 {
     try
@@ -319,6 +320,7 @@ app.Use(async (context, next) =>
         await context.Response.WriteAsJsonAsync(new { message = "Đã có lỗi xảy ra, vui lòng thử lại sau.", traceId = context.TraceIdentifier });
     }
 });
+*/
 
 if (app.Environment.IsDevelopment())
 {

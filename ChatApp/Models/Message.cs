@@ -14,6 +14,10 @@ public class Message
 
     public MessageType Type { get; set; } = MessageType.Text;
     public string? Content { get; set; }
+    // Metadata cho Voice Message và Media (Yêu cầu 20)
+    public int? VoiceDuration { get; set; } 
+    public string? WaveformPoints { get; set; } 
+    public string? MediaUrl { get; set; }
 
     public Guid? ReplyToMessageId { get; set; }
     public Guid? ForwardedFromMessageId { get; set; }

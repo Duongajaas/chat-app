@@ -54,6 +54,22 @@ public class ConversationService(AppDbContext db) : IConversationService
             m.ConversationId == c.Id && m.UserId == userId && (m.LeftAt != null || m.HiddenAt == null)));
         if (cursor != null)
         {
+            var isDirect = x.Type == ConversationType.Direct;
+var found = directPeers.TryGetValue(x.Id, out var peer);
+var hasPeer = isDirect && found;
+var peerUserId = hasPeer ? peer.UserId : (Guid?)null;
+
+            result.Add(new ConversationSummaryResponse(
+                x.Id,
+                hasPeer ? peer.FullName : x.Name,
+                x.Type,
+                x.UnreadCount,
+                x.CreatedAt,
+                x.UpdatedAt,
+                x.LastMessageId,
+                x.LastMessageAt,
+                peerUserId is not null && await _blockService.IsBlockedEitherWayAsync(userId, peerUserId.Value),
+                peerUserId));
             try
             {
                 var parts = Encoding.UTF8.GetString(Convert.FromBase64String(cursor)).Split('|');

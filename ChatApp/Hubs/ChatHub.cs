@@ -33,6 +33,26 @@ public class ChatHub(AppDbContext db, IPresenceTracker presence, IMessageService
     public async Task JoinConversation(Guid conversationId) => await EnsureMemberAsync(conversationId);
     public Task LeaveConversation(Guid conversationId) => Task.CompletedTask;
 
+    public async Task LeaveConversation(Guid conversationId)
+    {
+        await EnsureConversationMembershipAsync(conversationId);
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, conversationId.ToString());
+    }
+
+    public async Task SendMessage(Guid conversationId, string? content, string? mediaUrl = null, int? voiceDuration = null, string? waveformPoints = null)
+{
+    await EnsureConversationMembershipAsync(conversationId);
+    await Clients.Group(conversationId.ToString()).SendAsync("ReceiveMessage", new
+    {
+        ConversationId = conversationId,
+        SenderId = GetCurrentUserId(),
+        Content = content,
+        MediaUrl = mediaUrl,
+        VoiceDuration = voiceDuration,
+        WaveformPoints = waveformPoints,
+        CreatedAt = DateTime.UtcNow
+    });
+}
     public Task RefreshPresence() => presenceEvents.SendSnapshotAsync(UserId, Clients.Caller, Context.ConnectionAborted);
 
     public async Task Typing(Guid conversationId, bool isTyping)
