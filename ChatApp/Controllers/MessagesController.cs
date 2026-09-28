@@ -43,9 +43,14 @@ public class MessagesController : ControllerBase
             return Unauthorized();
 
         var clientMessageId = payload.ClientMessageId ?? Guid.Empty;
-        var request = new SendMessageRequest(payload.Content);
+        var request = new SendMessageRequest(payload.Content, payload.ReplyToMessageId, payload.Mentions);
         return Ok(await _messageService.SendMessageAsync(userId, clientMessageId, conversationId, request, HttpContext.RequestAborted));
     }
+
+    [HttpPost("api/messages/{messageId:guid}/forward"), EnableRateLimiting("chat-write")]
+    public async Task<ActionResult<MessageResponse>> Forward(Guid messageId, ForwardMessageRequest request) =>
+        Ok(await _messageService.ForwardAsync(Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!),
+            messageId, request.TargetConversationId, request.ClientMessageId, HttpContext.RequestAborted));
 
     [HttpDelete("api/messages/{messageId:guid}")]
     public async Task<IActionResult> Delete(Guid messageId)

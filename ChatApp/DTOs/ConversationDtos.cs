@@ -22,7 +22,8 @@ public record ConversationSummaryResponse(
     string[]? Permissions = null,
     int MemberCount = 0,
     long Version = 0,
-    DateTime? ClosedAt = null
+    DateTime? ClosedAt = null,
+    string? AvatarUrl = null
 );
 
 public record MessageResponse(
@@ -34,7 +35,12 @@ public record MessageResponse(
     Guid? ClientMessageId,
     DateTime CreatedAt,
     DateTime? EditedAt = null,
-    string Status = "Sent"
+    string Status = "Sent",
+    Guid? ReplyToMessageId = null,
+    ReplyPreviewResponse? ReplyPreview = null,
+    bool IsForwarded = false,
+    MentionResponse[]? Mentions = null,
+    AttachmentResponse[]? Attachments = null
 );
 
 public record MessageListResponse(
@@ -51,12 +57,16 @@ public record CreateConversationRequest(
 );
 
 public record SendMessageRequest(
-    string? Content
+    string? Content,
+    Guid? ReplyToMessageId = null,
+    MentionInput[]? Mentions = null
 );
 
 public record SendMessagePayload(
     [Required] Guid? ClientMessageId,
-    [Required, StringLength(4000)] string? Content
+    [Required, StringLength(4000)] string? Content,
+    Guid? ReplyToMessageId = null,
+    [MaxLength(20)] MentionInput[]? Mentions = null
 );
 
 public record MessageStateResponse(Guid Id, bool Deleted, bool Hidden);

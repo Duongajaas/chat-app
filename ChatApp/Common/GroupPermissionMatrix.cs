@@ -6,9 +6,9 @@ public static class GroupPermissionMatrix
 {
     public static string[] Permissions(MemberRole role) => role switch
     {
-        MemberRole.Owner => ["RenameGroup", "AddMember", "ManageRoles", "ManageInvites", "DeleteOthersMessage", "ViewAudit"],
-        MemberRole.Admin => ["RenameGroup", "AddMember", "ManageInvites", "DeleteOthersMessage", "ViewAudit"],
-        MemberRole.Member => ["AddMember"],
+        MemberRole.Owner => ["ChangeAvatar", "PinMessage", "RenameGroup", "AddMember", "ManageRoles", "ManageInvites", "DeleteOthersMessage", "ViewAudit"],
+        MemberRole.Admin => ["ChangeAvatar", "PinMessage", "RenameGroup", "AddMember", "ManageInvites", "DeleteOthersMessage", "ViewAudit"],
+        MemberRole.Member => ["ChangeAvatar", "PinMessage", "AddMember"],
         _ => []
     };
     public static bool HasPermission(MemberRole role, string permission) => Permissions(role).Contains(permission);

@@ -33,7 +33,11 @@ public static class RuntimeServices
             services.AddSingleton<IPresenceTracker, InMemoryPresenceTracker>();
             services.AddSingleton<IRateLimitCounter, InMemoryRateLimitCounter>();
         }
-        if (role != "api") services.AddHostedService<OutboxWorker>();
+        if (role != "api")
+        {
+            services.AddHostedService<OutboxWorker>();
+            services.AddHostedService<ChatApp.Media.AvatarCleanupWorker>();
+        }
         return role;
     }
 }

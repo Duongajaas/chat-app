@@ -74,6 +74,43 @@ public class RealtimeIntegrationTests(PostgresFixture fixture) : IClassFixture<P
         await db.SaveChangesAsync(); return users;
     }
     [Fact]
+    public async Task Cooldown_and_reconcile_http_contracts_preserve_privacy()
+    {
+        var users = await Users();
+        Guid id;
+        await using (var db = fixture.Open())
+            id = (await new ConversationService(db).GetOrCreateDirectConversationAsync(users[0].Id, users[1].Id)).Id;
+        await using var app = Factory(runOutbox: false);
+        using var a = Client(app, users[0]); using var b = Client(app, users[1]);
+        var key = Guid.NewGuid();
+        var payload = new { clientMessageId = key, content = "committed" };
+        var first = await a.PostAsJsonAsync($"/api/conversations/{id}/messages", payload);
+        first.EnsureSuccessStatusCode();
+        (await a.PostAsync($"/api/blocks/{users[1].Id}", null)).EnsureSuccessStatusCode();
+        (await b.PostAsync($"/api/blocks/{users[0].Id}", null)).EnsureSuccessStatusCode();
+        (await a.DeleteAsync($"/api/blocks/{users[1].Id}")).EnsureSuccessStatusCode();
+        (await a.DeleteAsync($"/api/blocks/{users[1].Id}")).EnsureSuccessStatusCode();
+        var rejected = await a.PostAsync($"/api/blocks/{users[1].Id}", null);
+        Assert.Equal(HttpStatusCode.Conflict, rejected.StatusCode);
+        var error = await rejected.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("REBLOCK_COOLDOWN", error.GetProperty("code").GetString());
+        Assert.InRange(error.GetProperty("remainingSeconds").GetInt32(), 3500, 3600);
+        Assert.True(error.GetProperty("reblockAllowedAt").GetDateTime() > DateTime.UtcNow);
+        var summary = await a.GetFromJsonAsync<ConversationSummaryResponse>($"/api/conversations/{id}", Json);
+        Assert.True(summary!.IsBlocked);
+        var request = new { items = new[] { payload } };
+        var own = await a.PostAsJsonAsync($"/api/conversations/{id}/messages/reconcile", request);
+        own.EnsureSuccessStatusCode();
+        Assert.Equal("Readable", (await own.Content.ReadFromJsonAsync<MessageReceipt[]>())!.Single().State);
+        var other = await b.PostAsJsonAsync($"/api/conversations/{id}/messages/reconcile", request);
+        Assert.Equal("NotFound", (await other.Content.ReadFromJsonAsync<MessageReceipt[]>())!.Single().State);
+        var retry = await a.PostAsJsonAsync($"/api/conversations/{id}/messages", payload);
+        retry.EnsureSuccessStatusCode();
+        Assert.Equal((await first.Content.ReadFromJsonAsync<MessageResponse>())!.Id,
+            (await retry.Content.ReadFromJsonAsync<MessageResponse>())!.Id);
+    }
+
+    [Fact]
     public async Task Group_rejoin_on_second_api_does_not_receive_gap_events_from_delayed_worker()
     {
         var users = await Users(true);

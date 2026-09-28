@@ -5,8 +5,9 @@ RUN dotnet restore
 COPY . .
 RUN dotnet publish -c Release --no-restore -o /out
 RUN dotnet tool install dotnet-ef --version 10.0.4 --tool-path /tools \
-    && /tools/dotnet-ef migrations bundle --configuration Release --output /out/efbundle
-
+    && ConnectionStrings__DefaultConnection="Host=localhost;Port=5432;Database=build_only;Username=build_only;Password=build_only" \
+       /tools/dotnet-ef migrations bundle --configuration Release --output /out/efbundle 
+# tạo ra một migration giả chỉ cho lệnh build migration bundle.       
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app

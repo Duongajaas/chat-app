@@ -5,6 +5,7 @@ public class Conversation
     public Guid Id { get; set; } = Guid.NewGuid();
     public ConversationType Type { get; set; }
     public string? Name { get; set; }
+    public Guid? AvatarAssetId { get; set; }
     public string? AvatarUrl { get; set; }
     public Guid? CreatedBy { get; set; }
 
