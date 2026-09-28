@@ -10,8 +10,13 @@ namespace ChatApp.Services;
 public class MessageReconciliation(AppDbContext db)
 {
     public static string Hash(Guid conversationId, SendMessageRequest request, Guid? sourceId) =>
-        GroupService.Hash(JsonSerializer.Serialize(new { conversationId, request.Content,
-            request.ReplyToMessageId, Mentions = request.Mentions ?? [], sourceId }));
+        // Keep hashes of existing text messages stable across this rollout.
+        request.MediaUrl == null && request.VoiceDuration == null && request.WaveformPoints == null
+            ? GroupService.Hash(JsonSerializer.Serialize(new { conversationId, request.Content,
+                request.ReplyToMessageId, Mentions = request.Mentions ?? [], sourceId }))
+            : GroupService.Hash(JsonSerializer.Serialize(new { conversationId, request.Content,
+                request.ReplyToMessageId, Mentions = request.Mentions ?? [], request.MediaUrl,
+                request.VoiceDuration, request.WaveformPoints, sourceId }));
 
     public async Task<List<MessageReceipt>> ReconcileAsync(Guid user, Guid conversation, ReconcileItem[] items, CancellationToken ct)
     {
@@ -30,7 +35,8 @@ public class MessageReconciliation(AppDbContext db)
         var responses = (await new MessageReader(db).BuildAsync(user, conversation, readable, ct)).ToDictionary(m => m.Id);
         return items.Select(item => {
             if (!existing.TryGetValue(item.ClientMessageId, out var message)) return new MessageReceipt(item.ClientMessageId, "NotFound");
-            var request = new SendMessageRequest(item.Content, item.ReplyToMessageId, item.Mentions);
+            var request = new SendMessageRequest(item.Content, item.ReplyToMessageId, item.Mentions,
+                item.MediaUrl, item.VoiceDuration, item.WaveformPoints);
             var matches = message.RequestHash != null ? message.RequestHash == Hash(conversation, request, item.SourceMessageId)
                 : item.SourceMessageId == null && item.ReplyToMessageId == message.ReplyToMessageId && (item.Mentions?.Length ?? 0) == 0 && message.Content == item.Content?.Trim();
             if (message.ConversationId != conversation || !matches) return new MessageReceipt(item.ClientMessageId, "Conflict");

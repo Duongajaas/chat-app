@@ -3,6 +3,9 @@ export interface QueuePayload {
   content?: string | null;
   replyToMessageId?: string | null;
   mentions?: { userId: string; start: number; length: number }[];
+  mediaUrl?: string | null;
+  voiceDuration?: number | null;
+  waveformPoints?: string | null;
   sourceMessageId?: string;
 }
 export interface QueueTask {

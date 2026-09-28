@@ -17,7 +17,7 @@ export const messagesApi = {
       })
       .then((r) => r.data),
 
-  send: (conversationId: string, payload: { clientMessageId: string; content?: string | null; replyToMessageId?: string | null; mentions?: import("../utils/mentions").MentionInput[] }) =>
+  send: (conversationId: string, payload: import("../realtime/sendQueue").QueuePayload) =>
     apiClient.post<ChatMessage>(`/conversations/${conversationId}/messages`, payload).then((r) => r.data),
 
   batch: (conversationId: string, ids: string[]) => apiClient.post<ChatMessage[]>(`/conversations/${conversationId}/messages/batch`, { ids }).then(r => r.data),

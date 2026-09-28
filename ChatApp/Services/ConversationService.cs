@@ -54,22 +54,6 @@ public class ConversationService(AppDbContext db) : IConversationService
             m.ConversationId == c.Id && m.UserId == userId && (m.LeftAt != null || m.HiddenAt == null)));
         if (cursor != null)
         {
-            var isDirect = x.Type == ConversationType.Direct;
-var found = directPeers.TryGetValue(x.Id, out var peer);
-var hasPeer = isDirect && found;
-var peerUserId = hasPeer ? peer.UserId : (Guid?)null;
-
-            result.Add(new ConversationSummaryResponse(
-                x.Id,
-                hasPeer ? peer.FullName : x.Name,
-                x.Type,
-                x.UnreadCount,
-                x.CreatedAt,
-                x.UpdatedAt,
-                x.LastMessageId,
-                x.LastMessageAt,
-                peerUserId is not null && await _blockService.IsBlockedEitherWayAsync(userId, peerUserId.Value),
-                peerUserId));
             try
             {
                 var parts = Encoding.UTF8.GetString(Convert.FromBase64String(cursor)).Split('|');
@@ -120,7 +104,9 @@ var peerUserId = hasPeer ? peer.UserId : (Guid?)null;
             return new ConversationSummaryResponse(c.Id, peer.HasValue ? names.GetValueOrDefault(peer.Value) : c.Name,
                 c.Type, member.UnreadCount, c.CreatedAt, c.UpdatedAt, last?.Id, last?.CreatedAt,
                 peer.HasValue && blocked.Contains(peer.Value), peer,
-                last == null ? null : last.DeletedAt != null ? "Tin nhắn đã được thu hồi" : last.Content,
+                last == null ? null : last.DeletedAt != null ? "Tin nhắn đã được thu hồi" :
+                    !string.IsNullOrWhiteSpace(last.Content) ? last.Content :
+                    last.VoiceDuration != null ? "Tin nhắn thoại" : last.MediaUrl != null ? "Media" : null,
                 active && member.Role is MemberRole.Admin or MemberRole.Owner, member.HiddenAt != null, member.LeftAt != null,
                 active ? member.Role : null, active && c.Type == ConversationType.Group ? GroupPermissionMatrix.Permissions(member.Role) : [],
                 active ? counts.GetValueOrDefault(c.Id) : 0, c.Version, c.ClosedAt, c.AvatarUrl);
