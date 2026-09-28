@@ -32,7 +32,7 @@ Chỉ khi socket count = 0 → offline.
 
 Heartbeat/ping-pong: client gửi ping định kỳ, server timeout sau N giây không nhận ping → coi như disconnect.
 
-## 4. Online Status & Last Seen
+## 4. Online Status & Last Seen (ok)
 
 Hiển thị "Online" hay "Last seen"? Tùy business.
 
@@ -50,7 +50,7 @@ A block B → không gửi request được.
 
 Đã là bạn → không gửi request lại.
 
-## 6. Block
+## 6. Block (ok)
 
 A block B → không chat, không gọi, không thấy online, không gửi request, không push notification.
 
@@ -58,21 +58,25 @@ Invite group khi bị block? Tùy business.
 
 Conversation cũ có xóa không? → Không, chỉ không gửi thêm message được (giống Messenger).
 
-## 7. Conversation
+## 7. Conversation (ok)
 
 **Direct conversation**: chỉ tồn tại 1 conversation duy nhất giữa 2 user (A chat B trước, B chat A sau vẫn dùng chung 1 conversation, không tạo mới).
 
 **Delete conversation**: không xóa DB, chỉ hidden với user đó.
 
-**Leave group**: member rời → không nhận message mới, nhưng vẫn xem được history cũ.
+**Leave group**: member rời → không nhận message mới, vẫn xem lịch sử trong các khoảng đã là thành viên. Rejoin mở một khoảng mới; không đọc tin gửi lúc vắng mặt hoặc trước lần tham gia đầu tiên.
 
-**Owner leave group**: owner mới = admin đầu tiên hoặc member join sớm nhất (tùy rule).
+**Owner leave group**: Admin active có JoinedAt sớm nhất kế nhiệm; nếu không có thì Member sớm nhất; hòa dùng Id. Người cuối cùng rời thì đóng nhóm, thu hồi mọi invite, giữ lịch sử.
 
-**Group invite link**: có thời hạn, giới hạn số lượt dùng, revoke được; join có cần admin approve không → tùy business.
+**Group invite link**: Owner/Admin tạo và thu hồi; lưu hash, mã gốc chỉ trả lúc tạo; mặc định 7 ngày/100 lượt, join không cần duyệt. Người bị kick không dùng link tự vào lại; chỉ Owner/Admin được thêm lại. Nhóm tối đa 100 thành viên active.
+
+**Thêm thành viên**: Member được thêm bạn bè không có block. Block không tự kick hay xóa lịch sử nhóm; sau kick vẫn đọc các khoảng trước đó, không đọc tin ngoài khoảng thành viên.
+
+Thiết kế đã duyệt D1–D6 và kế hoạch triển khai: [Group conversation](production-fix-plan.md).
 
 ## 8. Group Permission & Role
 
-Member không đổi được tên nhóm, admin đổi được.
+Member không đổi được tên nhóm, admin đổi được. Member active được đổi avatar nhóm và ghim/gỡ tin nằm trong quyền đọc; avatar dùng assetId nội bộ đã xác minh, cập nhật cùng version/audit/outbox.
 
 Member không kick được admin. Owner kick được admin.
 
@@ -110,7 +114,7 @@ Receiver đã đọc rồi vẫn cho xóa (giống Messenger).
 
 ## 13. Reply Message
 
-Nếu message gốc bị xóa → reply hiển thị "Original message unavailable".
+Nếu message gốc bị thu hồi, xóa phía người đọc hoặc nằm ngoài membership periods → reply hiển thị "Tin nhắn gốc không khả dụng". Preview lấy theo lô riêng cho từng người đọc; realtime chỉ phát metadata.
 
 ## 14. Forward Message
 
@@ -126,9 +130,11 @@ Mỗi user chỉ 1 reaction/message. Đổi reaction → update record, không t
 
 Mention trong group → notification riêng, ưu tiên cao hơn tin nhắn thường.
 
-User bị mention nhưng đã rời group → không gửi notification.
+Mention lưu UserId, username đã xác nhận và vị trí UTF-16; bỏ self/trùng/inactive, tối đa 10 người mỗi tin. Worker kiểm tra lại quyền đọc và active membership trước khi phát; người đã rời nhóm không nhận notification mới.
 
 ## 17. Pin Message
+
+Tối đa 5 pin toàn conversation; khóa conversation trước kiểm tra/thêm, unique (ConversationId, MessageId). Danh sách lọc theo period người đọc; thu hồi message tự gỡ pin trong cùng transaction.
 
 Giới hạn số lượng pin/conversation (vd tối đa 3–5).
 
@@ -166,7 +172,7 @@ B online, mở conversation → mới tính là "Read", server update trạng th
 
 Nhận qua notification (chưa mở app) → không tính là đã đọc.
 
-## 23. Typing Indicator
+## 23. Typing Indicator (ok)
 
 Không lưu DB. Debounce (vd 3 giây không gõ tiếp → gửi "Typing stop").
 
@@ -182,7 +188,7 @@ Receiver online → không push. Receiver offline → push.
 
 Muted conversation → không push. Bị block → không push.
 
-Mention vẫn ưu tiên push kể cả khi mute (tùy business).
+Mention vượt mute; worker vẫn kiểm tra membership period, active membership/tài khoản và trạng thái xóa/thu hồi. Hiện triển khai thông báo trong ứng dụng, chưa có browser/mobile push.
 
 ## 26. Message Ordering (ok)
 
@@ -242,7 +248,7 @@ Spam login sai nhiều lần → lock account.
 
 Spam upload → giới hạn dung lượng/số lượng theo thời gian.
 
-## 34. Realtime Scaling (WebSocket/SignalR)
+## 34. Realtime Scaling (WebSocket/SignalR) (ok)
 
 Nhiều server instance: User A connect Server 1, User B connect Server 2 → Server 1 làm sao gửi message cho B?
 
