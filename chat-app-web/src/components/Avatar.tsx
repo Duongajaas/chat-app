@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 interface AvatarProps {
+  src?: string | null;
   name: string;
   color?: string;
   size?: number;
@@ -11,11 +13,13 @@ function getInitials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-export function Avatar({ name, color = "#33d6a6", size = 40, isOnline }: AvatarProps) {
+export function Avatar({ name, color = "#33d6a6", size = 40, isOnline, src }: AvatarProps) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [src]);
   return (
     <div className="avatar-wrap" style={{ width: size, height: size }}>
       <div className="avatar-circle" style={{ width: size, height: size, background: color, fontSize: size * 0.38 }}>
-        {getInitials(name)}
+        {src && !failed ? <img src={src} alt={name} onError={() => setFailed(true)} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} /> : getInitials(name)}
       </div>
       {isOnline && <span className="avatar-online-dot" />}
     </div>

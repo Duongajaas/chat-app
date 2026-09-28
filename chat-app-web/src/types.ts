@@ -64,6 +64,7 @@ export interface Conversation {
   type: ConversationType;
   peerUserId?: string;
   avatarColor: string;
+  avatarUrl?: string | null;
   lastMessage: string;
   lastMessageAt: string;
   unreadCount: number;
@@ -84,6 +85,16 @@ export interface Conversation {
 }
 
 export interface ChatMessage {
+  deliveryState?: import("./realtime/sendQueue").DeliveryState;
+  deliveryError?: string;
+  pendingSourceMessageId?: string;
+
+  replyToMessageId?: string | null;
+  replyPreview?: { id: string; senderName: string | null; contentSnippet: string | null; isAvailable: boolean; sequence?: number } | null;
+  isForwarded?: boolean;
+  mentions?: import("./utils/mentions").Mention[];
+  pendingMentions?: import("./utils/mentions").MentionInput[];
+  attachments?: { id: string; fileName: string | null; fileType: string | null; fileSize: number | null }[];
   id: string;
   conversationId: string;
   senderId: string;
@@ -91,7 +102,7 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   clientMessageId?: string;
-  status?: "Sending" | "Sent" | "Failed" | "Deleted";
+  status?: "Sending" | "Sent" | "Failed" | "Deleted" | "Hidden" | "Unavailable";
 }
 
 export interface MessageListResponse {

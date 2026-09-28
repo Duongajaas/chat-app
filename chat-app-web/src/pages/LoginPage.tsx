@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { AuthLayout } from "../components/AuthLayout";
+import { AuthEntryLayout } from "../components/AuthEntryLayout";
+import { PasswordInput } from "../components/PasswordInput";
 import { GoogleLoginButton } from "../components/GoogleLoginButton";
 import { useAuth } from "../context/AuthContext";
 import { extractErrorMessage } from "../api/auth";
@@ -22,6 +23,7 @@ export default function LoginPage() {
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (isSubmitting) return;
     setError("");
     setIsSubmitting(true);
     try {
@@ -35,20 +37,20 @@ export default function LoginPage() {
   }
 
   return (
-    <AuthLayout
-      headline="Trò chuyện thời gian thực, mọi lúc mọi nơi."
-      subline="Nhắn tin, gọi thoại và video call trong cùng một nơi — nhanh, bảo mật và luôn đồng bộ trên mọi thiết bị của bạn."
-    >
-      <h2 className="auth-card__title">Đăng nhập</h2>
+    <AuthEntryLayout>
+      <h1 className="auth-card__title">Đăng nhập</h1>
       <p className="auth-card__sub">Chào mừng trở lại! Nhập thông tin để tiếp tục.</p>
 
-      {error && <div className="alert alert-danger">{error}</div>}
+      {error && <div className="alert alert-danger" role="alert">{error}</div>}
 
-      <form onSubmit={handleSubmit}>
+      <form onSubmit={handleSubmit} aria-busy={isSubmitting}>
         <div className="field">
           <label htmlFor="username">Username</label>
           <input
             id="username"
+            autoCapitalize="none"
+            spellCheck={false}
+            placeholder="Nhập username của bạn"
             type="text"
             autoComplete="username"
             value={username}
@@ -59,9 +61,8 @@ export default function LoginPage() {
 
         <div className="field">
           <label htmlFor="password">Mật khẩu</label>
-          <input
+          <PasswordInput
             id="password"
-            type="password"
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -79,13 +80,15 @@ export default function LoginPage() {
         </button>
       </form>
 
-      <div className="divider">hoặc</div>
+      {import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() && <>
+      <div className="divider">hoặc tiếp tục với</div>
 
       <GoogleLoginButton onSuccess={navigateAfterLogin} onError={(msg) => setError(msg)} />
+      </>}
 
       <p className="auth-footer-text">
         Chưa có tài khoản? <Link to="/register">Đăng ký ngay</Link>
       </p>
-    </AuthLayout>
+    </AuthEntryLayout>
   );
 }

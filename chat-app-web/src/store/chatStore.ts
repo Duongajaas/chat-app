@@ -46,11 +46,13 @@ export const useChatStore = create<ChatState>((set) => ({
   deletedMessageIds: {},
   hideMessage: (conversationId, messageId) => set(state => ({
     hiddenMessageIds: { ...state.hiddenMessageIds, [messageId]: true },
-    messagesByConversation: { ...state.messagesByConversation, [conversationId]: (state.messagesByConversation[conversationId] ?? []).filter(m => m.id !== messageId) },
+    messagesByConversation: { ...state.messagesByConversation, [conversationId]: (state.messagesByConversation[conversationId] ?? []).filter(m => m.id !== messageId).map(m =>
+      m.replyPreview?.id === messageId ? { ...m, replyPreview: { id: messageId, senderName: null, contentSnippet: null, isAvailable: false } } : m) },
   })),
   deleteMessage: (conversationId, messageId) => set(state => ({
     deletedMessageIds: { ...state.deletedMessageIds, [messageId]: true },
-    messagesByConversation: { ...state.messagesByConversation, [conversationId]: (state.messagesByConversation[conversationId] ?? []).map(m => m.id === messageId ? { ...m, status: "Deleted", content: "Tin nhắn đã được thu hồi" } : m) },
+    messagesByConversation: { ...state.messagesByConversation, [conversationId]: (state.messagesByConversation[conversationId] ?? []).map(m => m.id === messageId ? { ...m, status: "Deleted", content: "Tin nhắn đã được thu hồi", mentions: [], attachments: [], replyPreview: null } :
+      m.replyPreview?.id === messageId ? { ...m, replyPreview: { id: messageId, senderName: null, contentSnippet: null, isAvailable: false } } : m) },
   })),
   failMessage: (conversationId, clientMessageId) => set(state => ({
     messagesByConversation: { ...state.messagesByConversation, [conversationId]: (state.messagesByConversation[conversationId] ?? []).map(m =>
@@ -63,7 +65,10 @@ export const useChatStore = create<ChatState>((set) => ({
   isLoadingOlderByConversation: {},
   hasNewMessageBelowByConversation: {},
 
-  setConversations: (conversations) => set({ conversations }),
+  setConversations: (conversations) => set(state => ({ conversations: conversations.map(c => {
+    const previous = state.conversations.find(p => p.id === c.id);
+    return previous && (previous.version ?? 0) > (c.version ?? 0) ? previous : c;
+  }) })),
 
   updateConversation: (conversationId, next) =>
     set((state) => ({
@@ -146,6 +151,11 @@ export const useChatStore = create<ChatState>((set) => ({
 }));
 
 function mergeVisible(state: ChatState, existing: ChatMessage[], incoming: ChatMessage[]) {
-  return mergeMessages(existing, incoming).filter(m => !state.hiddenMessageIds[m.id]).map(m =>
-    state.deletedMessageIds[m.id] ? { ...m, status: "Deleted" as const, content: "Tin nhắn đã được thu hồi" } : m);
+  return mergeMessages(existing, incoming).filter(m => !state.hiddenMessageIds[m.id]).map(m => {
+    if (state.deletedMessageIds[m.id]) return { ...m, status: "Deleted" as const,
+      content: "Tin nhắn đã được thu hồi", mentions: [], attachments: [], replyPreview: null, replyToMessageId: null };
+    if (m.replyToMessageId && (state.deletedMessageIds[m.replyToMessageId] || state.hiddenMessageIds[m.replyToMessageId]))
+      return { ...m, replyPreview: { id: m.replyToMessageId, isAvailable: false, contentSnippet: null, senderName: null } };
+    return m;
+  });
 }

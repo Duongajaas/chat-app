@@ -31,9 +31,9 @@ export function Sidebar() {
       </div>
 
       <div className="app-sidebar__bottom" ref={menuRef}>
-        <button className="sidebar-icon-btn" title="Cài đặt (sắp có)" disabled>
+        <NavLink to="/settings" className={({ isActive }) => `sidebar-icon-btn ${isActive ? "is-active" : ""}`} title="Cài đặt" aria-label="Cài đặt">
           <SettingsIcon />
-        </button>
+        </NavLink>
 
         <div style={{ position: "relative" }}>
           <button className="sidebar-avatar-btn" onClick={() => setMenuOpen((v) => !v)}>
@@ -52,8 +52,8 @@ export function Sidebar() {
               <NavLink to="/profile" className="user-menu__item" onClick={() => setMenuOpen(false)}>
                 Xem trang cá nhân
               </NavLink>
-              <NavLink to="/friend-link" className="user-menu__item" onClick={() => setMenuOpen(false)}>
-                Link kết bạn
+              <NavLink to="/settings" className="user-menu__item" onClick={() => setMenuOpen(false)}>
+                Cài đặt
               </NavLink>
               <button className="user-menu__item user-menu__item--danger" onClick={logout}>
                 Đăng xuất

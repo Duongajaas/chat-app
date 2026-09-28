@@ -1,3 +1,4 @@
+import { messageDelivery } from "../realtime/messageDelivery";
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { Sidebar } from "../components/Sidebar";
@@ -28,10 +29,16 @@ export default function ChatPage() {
   const appendMessage = useChatStore((state) => state.appendMessage);
 
   const connectionStatus = useChatStore(state => state.connectionStatus);
+  const [mentionNotice, setMentionNotice] = useState<{ conversationId: string } | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [showMobileChat, setShowMobileChat] = useState(false);
 
+  useEffect(() => {
+    const listener = (event: Event) => setMentionNotice((event as CustomEvent<{ conversationId: string }>).detail);
+    window.addEventListener("chat:mention", listener);
+    return () => window.removeEventListener("chat:mention", listener);
+  }, []);
   const activeConversationIdRef = useRef(activeConversationId);
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -130,22 +137,25 @@ export default function ChatPage() {
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) ?? null;
   const activeMessages = activeConversationId ? messagesByConversation[activeConversationId] ?? [] : [];
 
-  async function handleSend(content: string, retry?: ChatMessage) {
+  async function handleSend(content: string, retry?: ChatMessage, features?: { replyToMessageId?: string; mentions?: import("../utils/mentions").MentionInput[] }) {
     const id = retry?.conversationId ?? activeConversationId;
     if (!id || !user) return;
     const version = getSessionVersion();
+    const replyToMessageId = retry?.replyToMessageId ?? features?.replyToMessageId;
+    const mentions = retry?.pendingMentions ?? features?.mentions ?? [];
     const clientMessageId = retry?.clientMessageId ?? crypto.randomUUID();
     appendMessage(id, {
       id: clientMessageId, conversationId: id, senderId: user.id, sequence: Number.MAX_VALUE,
-      content, createdAt: retry?.createdAt ?? new Date().toISOString(), clientMessageId, status: "Sending",
+      content, replyToMessageId, pendingMentions: mentions, pendingSourceMessageId: retry?.pendingSourceMessageId, createdAt: retry?.createdAt ?? new Date().toISOString(), clientMessageId, status: "Sending",
     });
     try {
-      const response = await messagesApi.send(id, { clientMessageId, content });
-      if (version !== getSessionVersion()) return;
-      appendMessage(id, { ...response, status: response.status === "Deleted" ? "Deleted" : "Sent" });
-      refreshConversation(id);
-    } catch {
-      if (version === getSessionVersion()) useChatStore.getState().failMessage(id, clientMessageId);
+      messageDelivery.enqueue({ accountId: user.id, session: version, conversationId: id,
+        payload: retry?.pendingSourceMessageId
+          ? { clientMessageId, sourceMessageId: retry.pendingSourceMessageId }
+          : { clientMessageId, content, replyToMessageId, mentions } }, !!retry);
+    } catch (error) {
+      useChatStore.getState().updateMessage(id, clientMessageId, { status: "Failed",
+        deliveryError: error instanceof Error ? error.message : "Không thể thêm tin vào hàng đợi." });
     }
   }
 
@@ -183,8 +193,9 @@ export default function ChatPage() {
   async function handleBlockUser(userId: string) {
     if (!activeConversationId) return;
 
+    const id = activeConversationId; const session = getSessionVersion();
     await blocksApi.block(userId);
-    updateConversation(activeConversationId, { isBlocked: true });
+    if (session === getSessionVersion()) refreshConversation(id);
   }
 
   function handleSelectConversation(conversationId: string) {
@@ -206,10 +217,13 @@ export default function ChatPage() {
         onAcceptRequest={handleAcceptRequest}
         onDeleteRequest={handleDeleteRequest}
       />
+      {mentionNotice && <button className="mention-notice" onClick={() => {
+        setActiveConversationId(mentionNotice.conversationId); setMentionNotice(null);
+      }}>Bạn được nhắc đến — mở nhóm</button>}
       <ChatWindow
         conversation={activeConversation}
         messages={activeMessages}
-        onSendMessage={handleSend}
+        onSendMessage={(content, features) => { void handleSend(content, undefined, features); }}
         onRetryMessage={(message) => { void handleSend(message.content, message); }}
         onBlockUser={handleBlockUser}
         onBack={() => setShowMobileChat(false)}

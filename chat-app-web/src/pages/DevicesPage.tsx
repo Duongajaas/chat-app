@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+﻿import { useEffect, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 import { devicesApi } from "../api/devices";
 import { extractErrorMessage } from "../api/auth";
-import { LaptopIcon, MobileIcon } from "../components/icons";
+import { LaptopIcon, MobileIcon, ArrowLeftIcon } from "../components/icons";
 import type { Device } from "../types";
 
 function formatLastActive(iso: string | null): string {
@@ -16,6 +16,7 @@ function formatLastActive(iso: string | null): string {
 }
 
 export default function DevicesPage() {
+  const location = useLocation();
   const [devices, setDevices] = useState<Device[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -44,7 +45,7 @@ export default function DevicesPage() {
   return (
     <div className="profile-page">
       <div className="profile-card">
-        <Link to="/profile" className="profile-back-link">← Quay lại trang cá nhân</Link>
+        <Link to="/settings" state={{ returnTo: location.state?.returnTo === "/profile" ? "/profile" : "/" }} className="profile-back-link"><ArrowLeftIcon /><span>Quay lại cài đặt</span></Link>
 
         <h2 style={{ fontFamily: "var(--font-display)", fontSize: 20, margin: "0 0 4px" }}>Thiết bị đang đăng nhập</h2>
         <p style={{ color: "var(--color-text-muted)", fontSize: 13.5, margin: "0 0 20px" }}>
@@ -79,3 +80,5 @@ export default function DevicesPage() {
     </div>
   );
 }
+
+

@@ -126,13 +126,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    clearSession();
     try {
       await authApi.logout();
     } catch {
       // Dù API lỗi vẫn clear session phía client
     }
-    clearSession();
-  }, []);
+  }, [clearSession]);
 
   const value: AuthContextValue = {
     user,

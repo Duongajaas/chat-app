@@ -10,8 +10,11 @@ let refreshPromise: Promise<string> | null = null;
 export const getSessionVersion = () => generation;
 export const getAccessToken = () => accessTokenInMemory;
 export function setAccessToken(token: string | null) { accessTokenInMemory = token; }
+const sessionListeners = new Set<() => void>();
+export function onSessionCleared(listener: () => void) { sessionListeners.add(listener); return () => sessionListeners.delete(listener); }
 export function clearAccessToken() {
   generation++;
+  sessionListeners.forEach(listener => listener());
   controller.abort();
   controller = new AbortController();
   accessTokenInMemory = null;
