@@ -41,7 +41,7 @@ public class EmailService : IEmailService
             var password = _smtpOptions.Password;
             var secureSocketOption = _smtpOptions.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls;
 
-            Console.WriteLine($"[DEBUG] Current dir = {username}");
+
 
             message.From.Add(new MailboxAddress(fromName, fromEmail));
             message.To.Add(MailboxAddress.Parse(toEmail));

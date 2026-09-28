@@ -1,0 +1,8 @@
+.env
+.env.production
+*.dump
+ChatApp.Tests/bin/
+ChatApp.Tests/obj/
+chat-app-web/coverage/
+chat-app-web/test-results/
+tls/

@@ -7,6 +7,8 @@ public class AppDbContext : DbContext
 {
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
+    public DbSet<GroupOperation> GroupOperations => Set<GroupOperation>();
+    public DbSet<OutboxEvent> OutboxEvents => Set<OutboxEvent>();
     public DbSet<User> Users => Set<User>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
@@ -20,6 +22,7 @@ public class AppDbContext : DbContext
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<DirectConversation> DirectConversations => Set<DirectConversation>();
     public DbSet<ConversationMember> ConversationMembers => Set<ConversationMember>();
+    public DbSet<ConversationMembershipPeriod> ConversationMembershipPeriods => Set<ConversationMembershipPeriod>();
     public DbSet<ConversationInvite> ConversationInvites => Set<ConversationInvite>();
 
     public DbSet<Message> Messages => Set<Message>();
@@ -43,6 +46,27 @@ public class AppDbContext : DbContext
     {
         base.OnModelCreating(modelBuilder);
         
+        modelBuilder.Entity<GroupOperation>(e =>
+        {
+            e.HasIndex(x => new { x.ActorId, x.Operation, x.Key }).IsUnique();
+            e.Property(x => x.Operation).HasMaxLength(80);
+            e.Property(x => x.RequestHash).HasMaxLength(64);
+        });
+        modelBuilder.Entity<OutboxEvent>(e =>
+        {
+            e.ToTable("outbox_events");
+            e.HasIndex(x => new { x.NextAttemptAt, x.CreatedAt }).HasFilter("processed_at IS NULL");
+            e.Property(x => x.EventName).HasMaxLength(80);
+            e.Property(x => x.Payload).HasColumnType("jsonb");
+        });
+        modelBuilder.Entity<ConversationMembershipPeriod>(e =>
+        {
+            e.ToTable("conversation_membership_periods", t => t.HasCheckConstraint("ck_period_bounds", "start_sequence >= 0 AND (end_sequence IS NULL OR end_sequence >= start_sequence)"));
+            e.HasIndex(x => new { x.ConversationId, x.UserId, x.StartSequence });
+            e.HasIndex(x => new { x.ConversationId, x.UserId }).IsUnique().HasFilter("end_sequence IS NULL");
+            e.HasOne<ConversationMember>().WithMany().HasForeignKey(x => new { x.ConversationId, x.UserId })
+                .HasPrincipalKey(x => new { x.ConversationId, x.UserId }).OnDelete(DeleteBehavior.Cascade);
+        });
         // ---------- Users & Auth ----------
         modelBuilder.Entity<User>(e =>
         {
@@ -152,7 +176,10 @@ public class AppDbContext : DbContext
             e.HasIndex(x => new { x.ConversationId, x.UserId }).IsUnique();
             e.HasIndex(x => x.UserId);
             e.HasIndex(x => x.ConversationId);
-            e.Property(x => x.RequestStatus).HasDefaultValue(MemberRequestStatus.Accepted);
+            e.HasIndex(x => x.ConversationId).IsUnique().HasDatabaseName("ix_group_active_owner").HasFilter("role = 0 AND left_at IS NULL");
+            e.Property(x => x.RequestStatus)
+                .HasDefaultValue(MemberRequestStatus.Accepted)
+                .HasSentinel((MemberRequestStatus)(-1));
             e.HasOne<Conversation>().WithMany().HasForeignKey(x => x.ConversationId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne<Message>().WithMany().HasForeignKey(x => x.LastReadMessageId).OnDelete(DeleteBehavior.SetNull);
@@ -162,7 +189,9 @@ public class AppDbContext : DbContext
         {
             e.ToTable("conversation_invites");
             e.HasIndex(x => x.ConversationId);
-            e.HasIndex(x => x.InviteCode).IsUnique();
+            e.HasIndex(x => x.InviteCodeHash).IsUnique();
+            e.ToTable("conversation_invites", t => t.HasCheckConstraint("ck_invite_uses",
+                "used_count >= 0 AND (max_uses IS NULL OR (max_uses > 0 AND used_count <= max_uses))"));
             e.HasOne<Conversation>().WithMany().HasForeignKey(x => x.ConversationId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne<User>().WithMany().HasForeignKey(x => x.CreatedBy).OnDelete(DeleteBehavior.SetNull);
         });

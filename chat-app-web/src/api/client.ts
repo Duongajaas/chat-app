@@ -1,107 +1,83 @@
 import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios";
 
-export const BASE_URL = import.meta.env.VITE_API_BASE_URL;
-
-export const apiClient = axios.create({
-  baseURL: BASE_URL,
-  withCredentials: false,
-});
-
-export const authClient = axios.create({
-  baseURL: BASE_URL,
-  withCredentials: true,
-});
-
+export const BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
+export const apiClient = axios.create({ baseURL: BASE_URL, withCredentials: false, timeout: 20000 });
+export const authClient = axios.create({ baseURL: BASE_URL, withCredentials: true, timeout: 20000 });
 let accessTokenInMemory: string | null = null;
-
-export function getAccessToken(): string | null {
-  return accessTokenInMemory;
+let generation = 0;
+let controller = new AbortController();
+let refreshPromise: Promise<string> | null = null;
+export const getSessionVersion = () => generation;
+export const getAccessToken = () => accessTokenInMemory;
+export function setAccessToken(token: string | null) { accessTokenInMemory = token; }
+export function clearAccessToken() {
+  generation++;
+  controller.abort();
+  controller = new AbortController();
+  accessTokenInMemory = null;
+  refreshPromise = null;
 }
 
-export function setAccessToken(token: string | null): void {
-  accessTokenInMemory = token;
+type SessionConfig = InternalAxiosRequestConfig & { sessionVersion?: number; _retry?: boolean };
+function prepare(config: SessionConfig) {
+  config.sessionVersion ??= generation;
+  if (config.sessionVersion !== generation) throw new axios.CanceledError("Session changed");
+  config.signal ??= controller.signal;
+  return config;
 }
-
-export function clearAccessToken(): void {
-  setAccessToken(null);
-}
-
-apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const token = getAccessToken();
-  if (token) {
-    config.headers.set("Authorization", `Bearer ${token}`);
-  }
+apiClient.interceptors.request.use(config => {
+  prepare(config);
+  if (accessTokenInMemory) config.headers.set("Authorization", `Bearer ${accessTokenInMemory}`);
   return config;
 });
-
-let refreshPromise: Promise<string> | null = null;
-
-async function doRefresh(): Promise<string> {
-  const { data } = await authClient.post<{ accessToken: string }>("/auth/refresh-token", {});
-  setAccessToken(data.accessToken);
-  return data.accessToken;
-}
-
-function refreshSingleFlight(): Promise<string> {
-  if (!refreshPromise) {
-    refreshPromise = doRefresh().finally(() => {
-      refreshPromise = null;
-    });
-  }
-
-  return refreshPromise;
-}
-
-type NavigatorWithLocks = Navigator & {
-  locks?: {
-    request<T>(name: string, callback: () => Promise<T>): Promise<T>;
-  };
+authClient.interceptors.request.use(prepare);
+const ensureCurrent = <T extends { config: InternalAxiosRequestConfig }>(response: T): T => {
+  if ((response.config as SessionConfig).sessionVersion !== generation) throw new axios.CanceledError("Session changed");
+  return response;
 };
+authClient.interceptors.response.use(ensureCurrent);
 
 export function refreshAcrossTabs(): Promise<string> {
-  const locks = (navigator as NavigatorWithLocks).locks;
-
-  if (locks) {
-    return locks.request("chatapp-auth-refresh", () => refreshSingleFlight());
+  if (refreshPromise) return refreshPromise;
+  const version = generation;
+  async function refresh() {
+    if (version !== generation) throw new axios.CanceledError("Session changed");
+    const { data } = await authClient.post<{ accessToken: string }>("/auth/refresh-token", {});
+    if (version !== generation) throw new axios.CanceledError("Session changed");
+    setAccessToken(data.accessToken);
+    return data.accessToken;
   }
-
-  return refreshSingleFlight();
+  const promise = Promise.resolve(navigator.locks ? navigator.locks.request("chatapp-auth-refresh", refresh) : refresh()).then(value => value)
+    .finally(() => { if (refreshPromise === promise) refreshPromise = null; });
+  refreshPromise = promise;
+  return promise;
 }
 
-type RetryableConfig = InternalAxiosRequestConfig & {
-  _retry?: boolean;
-};
-
-apiClient.interceptors.response.use(
-  (response) => response,
-  async (error: AxiosError) => {
-    const originalRequest = error.config as RetryableConfig | undefined;
-
-    if (!originalRequest) {
-      return Promise.reject(error);
-    }
-
-    const isAuthEndpoint =
-      originalRequest.url?.includes("/auth/login") ||
-      originalRequest.url?.includes("/auth/register") ||
-      originalRequest.url?.includes("/auth/google-login") ||
-      originalRequest.url?.includes("/auth/refresh-token");
-
-    if (error.response?.status !== 401 || originalRequest._retry || isAuthEndpoint) {
-      return Promise.reject(error);
-    }
-
-    originalRequest._retry = true;
-
+export async function getValidAccessToken() {
+  const token = getAccessToken();
+  if (token) {
     try {
-      const newAccessToken = await refreshAcrossTabs();
-      console.log("New access token obtained:", newAccessToken);
-      originalRequest.headers.set("Authorization", `Bearer ${newAccessToken}`);
-      return apiClient(originalRequest);
-    } catch (refreshError) {
-      clearAccessToken();
-      window.dispatchEvent(new Event("auth:session-expired"));
-      return Promise.reject(refreshError);
-    }
+      const payload = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+      if (JSON.parse(atob(payload)).exp * 1000 > Date.now() + 30000) return token;
+    } catch { /* Refresh a malformed/expired cached token. */ }
   }
-);
+  return refreshAcrossTabs();
+}
+
+apiClient.interceptors.response.use(ensureCurrent, async (error: AxiosError) => {
+  const config = error.config as SessionConfig | undefined;
+  if (!config || config.sessionVersion !== generation || error.response?.status !== 401 || config._retry)
+    return Promise.reject(error);
+  config._retry = true;
+  const version = generation;
+  try {
+    const token = await refreshAcrossTabs();
+    if (version !== generation) throw new axios.CanceledError("Session changed");
+    config.headers.set("Authorization", `Bearer ${token}`);
+    return apiClient(config);
+  } catch (refreshError) {
+    if (version === generation && axios.isAxiosError(refreshError) && [401, 403].includes(refreshError.response?.status ?? 0))
+      window.dispatchEvent(new Event("auth:session-expired"));
+    return Promise.reject(refreshError);
+  }
+});

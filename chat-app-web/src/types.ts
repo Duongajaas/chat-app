@@ -70,6 +70,13 @@ export interface Conversation {
   isOnline: boolean;
   isBlocked?: boolean;
   isAdmin?: boolean;
+  isHidden?: boolean;
+  hasLeft?: boolean;
+  role?: "Owner" | "Admin" | "Member";
+  permissions?: string[];
+  memberCount?: number;
+  version?: number;
+  closedAt?: string | null;
   requestStatus?: RequestStatus;
   createdAt?: string;
   updatedAt?: string;
@@ -91,4 +98,7 @@ export interface MessageListResponse {
   messages: ChatMessage[];
   nextCursor?: number | null;
   hasMore: boolean;
+  peerReadSequence?: number;
 }
+
+export interface ConversationPage { items: Conversation[]; nextCursor: string | null; }
