@@ -18,11 +18,17 @@ let stopReconciliation: (() => void) | undefined;
 const subscriptions = new Set<string>();
 const summaryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+const summaryRequests = new Map<string, { session: number; dirty: boolean }>();
+
 export function refreshConversation(conversationId: string) {
+  const running = summaryRequests.get(conversationId);
+  if (running && running.session === getSessionVersion()) { running.dirty = true; return; }
   if (summaryTimers.has(conversationId)) return;
   const version = getSessionVersion();
   summaryTimers.set(conversationId, setTimeout(async () => {
     summaryTimers.delete(conversationId);
+    const request = { session: version, dirty: false };
+    summaryRequests.set(conversationId, request);
     try {
       const item = normalizeConversation(await conversationsApi.getById(conversationId));
       if (version !== getSessionVersion()) return;
@@ -32,6 +38,10 @@ export function refreshConversation(conversationId: string) {
       const others = store.conversations.filter(c => c.id !== item.id);
       store.setConversations(item.isHidden && !item.hasLeft ? others : [...others, item]);
     } catch { /* A membership may have been revoked while fetching. */ }
+    finally {
+      if (summaryRequests.get(conversationId) === request) summaryRequests.delete(conversationId);
+      if (request.dirty && version === getSessionVersion()) refreshConversation(conversationId);
+    }
   }, 150));
 }
 
@@ -45,6 +55,12 @@ export async function syncConversation(conversationId: string) {
     if (version !== getSessionVersion()) return;
     const returned = new Set(states.map(s => s.id));
     confirmed.slice(offset, offset + 100).filter(m => !returned.has(m.id)).forEach(m => useChatStore.getState().hideMessage(conversationId, m.id));
+    const replyIds = confirmed.slice(offset, offset + 100).filter(m => m.replyToMessageId).map(m => m.id);
+    if (replyIds.length) {
+      const fresh = await messagesApi.batch(conversationId, replyIds);
+      if (version !== getSessionVersion()) return;
+      useChatStore.getState().syncNewerMessages(conversationId, fresh);
+    }
     states.forEach(state => {
       if (state.hidden) useChatStore.getState().hideMessage(conversationId, state.id);
       else if (state.deleted) useChatStore.getState().deleteMessage(conversationId, state.id);
@@ -167,6 +183,17 @@ export function startChatHub(nextUserId: string) {
   c.on("TypingIndicator", (p: { conversationId: string; userId: string; isTyping: boolean }) => {
     if (current() && p.userId !== nextUserId) usePresenceStore.getState().setTypingForConversation(p.conversationId, p.isTyping);
   });
+  c.on("PinsChanged", () => { if (current()) window.dispatchEvent(new Event("chat:pins-changed")); });
+  for (const name of ["MessageAvailable", "MentionReceived"]) c.on(name, async (p: { conversationId: string; messageId: string }) => {
+    if (!current()) return;
+    try {
+      const [message] = await messagesApi.batch(p.conversationId, [p.messageId]);
+      if (!current() || !message || message.status === "Deleted") return;
+      useChatStore.getState().appendMessage(p.conversationId, message);
+      refreshConversation(p.conversationId);
+      if (name === "MentionReceived") window.dispatchEvent(new CustomEvent("chat:mention", { detail: p }));
+    } catch { /* REST reconciliation repairs missed events. */ }
+  });
   c.on("ReceiveMessage", (p: ChatMessage) => {
     if (!current() || typeof p.id !== "string" || typeof p.conversationId !== "string" || typeof p.senderId !== "string" ||
       !Number.isSafeInteger(p.sequence) || p.sequence <= 0 || !Number.isFinite(Date.parse(p.createdAt)) || typeof p.content !== "string") return;
@@ -183,6 +210,7 @@ export function startChatHub(nextUserId: string) {
     const store = useChatStore.getState();
     if (name === "MessageHidden") store.hideMessage(p.conversationId, p.messageId);
     else store.deleteMessage(p.conversationId, p.messageId);
+    window.dispatchEvent(new Event("chat:pins-changed"));
     refreshConversation(p.conversationId);
   });
   c.on("ConversationChanged", (p: { conversationId: string }) => { if (current()) refreshConversation(p.conversationId); });
@@ -197,6 +225,7 @@ export function startChatHub(nextUserId: string) {
     if (!current()) return;
     useChatStore.getState().setConnectionStatus("connected");
     await recover(c);
+    if (current()) window.dispatchEvent(new Event("chat:reconnected"));
   });
   c.onclose(() => { if (current()) scheduleRetry(c); });
   void ensureStarted(c).catch(() => scheduleRetry(c));
@@ -210,7 +239,7 @@ export async function stopChatHub() {
   starting = null;
   attempt = 0;
   clearTimeout(retryTimer); retryTimer = undefined;
-  summaryTimers.forEach(clearTimeout); summaryTimers.clear();
+  summaryTimers.forEach(clearTimeout); summaryTimers.clear(); summaryRequests.clear();
   subscriptions.clear();
   if (old) await old.stop().catch(() => undefined);
 }

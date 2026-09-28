@@ -1,7 +1,7 @@
-import { CreateGroup } from "./CreateGroup";
-import { useEffect, useState } from "react";
+﻿import { CreateGroup } from "./CreateGroup";
+import { useEffect, useRef, useState } from "react";
 import { Avatar } from "./Avatar";
-import { SearchIcon } from "./icons";
+import { SearchIcon, MoreIcon } from "./icons";
 import type { Conversation } from "../types";
 import { usePresenceStore } from "../store/presenceStore";
 import { friendRequestsApi, type PendingFriendRequest } from "../api/friendRequests";
@@ -24,15 +24,35 @@ function getAvatarColor(id: string): string {
 }
 
 export function ConversationList({ conversations, activeId, onSelect, onAcceptRequest, onDeleteRequest, hasMore, loadingMore, onLoadMore }: ConversationListProps) {
+  const more = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const dismiss = (event: Event) => {
+      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+      if (event.type === "pointerdown" && more.current?.contains(event.target as Node)) return;
+      if (more.current) more.current.open = false;
+    };
+    document.addEventListener("pointerdown", dismiss); document.addEventListener("keydown", dismiss);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", dismiss); };
+  }, []);
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
-  const [activeTab, setActiveTab] = useState<"accepted" | "pending" | "left">("accepted");
+  const [activeTab, setActiveTab] = useState<"accepted" | "unread" | "pending" | "left">("accepted");
   const [pendingRequests, setPendingRequests] = useState<PendingFriendRequest[]>([]);
   const [isLoadingPending, setIsLoadingPending] = useState(false);
   const [pendingError, setPendingError] = useState("");
   const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
   const onlineUserIds = usePresenceStore((state) => state.onlineUserIds);
   const pendingCount = pendingRequests.length;
+  const unreadCount = conversations.filter(c => c.unreadCount > 0 && !c.hasLeft && !c.closedAt && c.requestStatus !== "Pending").length;
+
+  function displayTime(value: string) {
+    if (!/^\d{4}-\d{2}-\d{2}/.test(value)) return value || "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toDateString() === new Date().toDateString()
+      ? date.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })
+      : date.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" });
+  }
 
   useEffect(() => {
     if (activeTab !== "pending") return;
@@ -63,6 +83,7 @@ export function ConversationList({ conversations, activeId, onSelect, onAcceptRe
 
   const visibleConversations = activeTab === "pending" ? pendingConversations : conversations;
   const filtered = visibleConversations
+    .filter(c => activeTab !== "unread" || c.unreadCount > 0)
     .filter((conversation) => activeTab === "pending" ? conversation.requestStatus === "Pending" : conversation.requestStatus !== "Pending")
     .filter(c => activeTab === "pending" || (activeTab === "left" ? c.hasLeft || !!c.closedAt : !c.hasLeft && !c.closedAt))
     .filter((c) => c.name.toLowerCase().includes(query.toLowerCase()));
@@ -82,20 +103,27 @@ export function ConversationList({ conversations, activeId, onSelect, onAcceptRe
   return (
     <section className="conversation-list">
       <div className="conversation-list__header">
-        <h2>Đoạn chat</h2>
-        <button onClick={() => setCreating(v => !v)}>Tạo nhóm</button>
-        <div className="conversation-tabs" role="tablist" aria-label="Loại cuộc trò chuyện">
-          <button type="button" className={activeTab === "accepted" ? "is-active" : ""} onClick={() => setActiveTab("accepted")}>Đoạn chat</button>
-          <button type="button" onClick={() => setActiveTab("left")}>Nhóm đã rời</button>
-          <button type="button" className={activeTab === "pending" ? "is-active" : ""} onClick={() => setActiveTab("pending")}>Lời mời {pendingCount > 0 && <span className="unread-badge">{pendingCount}</span>}</button>
+        <div className="conversation-list__heading"><h2>Đoạn chat</h2>
+        <button className="conversation-create" aria-label="Tạo nhóm" title="Tạo nhóm" aria-expanded={creating} onClick={() => setCreating(v => !v)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 8v8M8 12h8" /></svg></button></div>
+        <div className="conversation-search">
+          <SearchIcon />
+          <input aria-label="Tìm cuộc trò chuyện" placeholder="Tìm kiếm cuộc trò chuyện" value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
+        <div className="conversation-tabs" role="group" aria-label="Loại cuộc trò chuyện">
+          <button type="button" aria-pressed={activeTab === "accepted"} className={activeTab === "accepted" ? "is-active" : ""} onClick={() => setActiveTab("accepted")}>Tất cả</button>
+          <button type="button" aria-pressed={activeTab === "unread"} className={activeTab === "unread" ? "is-active" : ""} onClick={() => setActiveTab("unread")}>Chưa đọc {unreadCount > 0 && <span className="unread-badge">{unreadCount}</span>}</button>
+          <details ref={more} className="conversation-filters">
+            <summary aria-label="Bộ lọc khác" title="Bộ lọc khác" className={activeTab === "left" || activeTab === "pending" ? "is-active" : ""}><MoreIcon /></summary>
+            <div className="conversation-filters__menu">
+              <button type="button" onClick={() => { setActiveTab("left"); if (more.current) more.current.open = false; }}>Nhóm đã rời</button>
+              <button type="button" onClick={() => { setActiveTab("pending"); if (more.current) more.current.open = false; }}>Lời mời {pendingCount > 0 && <span className="unread-badge">{pendingCount}</span>}</button>
+            </div>
+          </details>
+        </div>
+        {(activeTab === "left" || activeTab === "pending") && <p className="conversation-list__filter-label">{activeTab === "left" ? "Nhóm đã rời" : "Lời mời kết bạn"}</p>}
       </div>
 
       {creating && <CreateGroup onCreated={onSelect} onClose={() => setCreating(false)} />}
-      <div className="conversation-search">
-        <SearchIcon />
-        <input placeholder="Tìm kiếm" value={query} onChange={(e) => setQuery(e.target.value)} />
-      </div>
 
       <div className="conversation-list__items">
         {activeTab === "pending" && isLoadingPending && <p className="conversation-list__empty">Đang tải lời mời...</p>}
@@ -107,13 +135,13 @@ export function ConversationList({ conversations, activeId, onSelect, onAcceptRe
             role="button"
             tabIndex={0}
             onClick={() => onSelect(c.id)}
-            onKeyDown={(event) => { if (event.key === "Enter") onSelect(c.id); }}
+            onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onSelect(c.id); } }}
           >
-            <Avatar name={c.name} color={c.avatarColor || getAvatarColor(c.id)} isOnline={c.type === "Direct" && (c.peerUserId ? onlineUserIds.has(c.peerUserId) : c.isOnline)} size={48} />
+            <Avatar src={c.avatarUrl} name={c.name} color={c.avatarColor || getAvatarColor(c.id)} isOnline={c.type === "Direct" && (c.peerUserId ? onlineUserIds.has(c.peerUserId) : c.isOnline)} size={44} />
             <div className="conversation-item__body">
               <div className="conversation-item__top">
                 <span className="conversation-item__name">{c.name}</span>
-                <span className="conversation-item__time">{c.lastMessageAt || "Gần đây"}</span>
+                <time className="conversation-item__time" title={c.lastMessageAt}>{displayTime(c.lastMessageAt)}</time>
               </div>
               <div className="conversation-item__bottom">
                 <span className="conversation-item__preview">{c.lastMessage || "Bắt đầu cuộc trò chuyện"}</span>
@@ -128,9 +156,10 @@ export function ConversationList({ conversations, activeId, onSelect, onAcceptRe
             </div>
           </div>
         ))}
-        {filtered.length === 0 && <p className="conversation-list__empty">Không tìm thấy cuộc trò chuyện nào.</p>}
+        {filtered.length === 0 && !(activeTab === "pending" && (isLoadingPending || pendingError)) && <p className="conversation-list__empty">{query ? "Không tìm thấy cuộc trò chuyện phù hợp." : activeTab === "pending" ? "Không có lời mời nào đang chờ." : activeTab === "left" ? "Chưa có nhóm đã rời." : "Chưa có cuộc trò chuyện nào. Chọn bạn trong Danh bạ để bắt đầu."}</p>}
       </div>
       {activeTab === "accepted" && hasMore && <button type="button" disabled={loadingMore} onClick={onLoadMore}>{loadingMore ? "Đang tải…" : "Tải thêm hội thoại"}</button>}
     </section>
   );
 }
+

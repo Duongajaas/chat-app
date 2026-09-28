@@ -47,7 +47,8 @@ public class OutboxWorker(IServiceScopeFactory scopes, IHubContext<ChatHub> hub,
                 : await ConversationEvents.RecipientsAsync(db, item.ConversationId, ct);
             // Do not replay original content after a message was recalled before delivery.
             var payload = JsonSerializer.Deserialize<JsonElement>(item.Payload);
-            if (item.EventName == "ReceiveMessage" && payload.TryGetProperty("id", out var messageId))
+            if ((item.EventName is "ReceiveMessage" or "MessageAvailable" or "MentionReceived") &&
+                (payload.TryGetProperty("id", out var messageId) || payload.TryGetProperty("messageId", out messageId)))
             {
                 var deleted = await db.Messages.AnyAsync(m => m.Id == messageId.GetGuid() && m.DeletedAt != null, ct);
                 if (deleted) recipients = [];
@@ -72,6 +73,16 @@ public class OutboxWorker(IServiceScopeFactory scopes, IHubContext<ChatHub> hub,
                         .Select(p => p.UserId.ToString()).ToListAsync(ct);
                     recipients = recipients.Intersect(allowed).ToArray();
                 }
+            }
+            if (item.EventName == "MentionReceived")
+            {
+                var mentionedMessageId = payload.GetProperty("messageId").GetGuid();
+                var active = await db.ConversationMembers.Where(m => m.ConversationId == item.ConversationId && m.LeftAt == null &&
+                    db.Users.Any(u => u.Id == m.UserId && u.IsActive && u.DeletedAt == null) &&
+                    db.MessageMentions.Any(t => t.MessageId == mentionedMessageId && t.MentionedUserId == m.UserId))
+                    .Select(m => m.UserId.ToString()).ToListAsync(ct);
+                recipients = recipients.Intersect(active).ToArray();
+                // Deliberately does not inspect MutedUntil: an explicit mention overrides mute.
             }
             if (recipients.Length > 0)
                 await hub.Clients.Users(recipients).SendAsync(item.EventName, payload, ct);

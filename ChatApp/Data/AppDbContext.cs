@@ -5,8 +5,10 @@ namespace ChatApp.Data;
 
 public class AppDbContext : DbContext
 {
+    public DbSet<BlockCooldown> BlockCooldowns => Set<BlockCooldown>();
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
+    public DbSet<AvatarAsset> AvatarAssets => Set<AvatarAsset>();
     public DbSet<GroupOperation> GroupOperations => Set<GroupOperation>();
     public DbSet<OutboxEvent> OutboxEvents => Set<OutboxEvent>();
     public DbSet<User> Users => Set<User>();
@@ -45,7 +47,21 @@ public class AppDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.Entity<BlockCooldown>(e => {
+            e.HasKey(x => new { x.ActorId, x.TargetId });
+            e.HasOne<User>().WithMany().HasForeignKey(x => x.ActorId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<User>().WithMany().HasForeignKey(x => x.TargetId).OnDelete(DeleteBehavior.Cascade);
+        });
         
+        modelBuilder.Entity<AvatarAsset>(e =>
+        {
+            e.HasIndex(a => a.PublicId).IsUnique();
+            e.HasIndex(a => new { a.DeletedAt, a.CreatedAt });
+            e.HasOne<Conversation>().WithMany().HasForeignKey(a => a.ConversationId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<User>().WithMany().HasForeignKey(a => a.UploadedBy).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<Conversation>().HasOne<AvatarAsset>().WithMany()
+            .HasForeignKey(c => c.AvatarAssetId).OnDelete(DeleteBehavior.SetNull);
         modelBuilder.Entity<GroupOperation>(e =>
         {
             e.HasIndex(x => new { x.ActorId, x.Operation, x.Key }).IsUnique();

@@ -1,10 +1,12 @@
+﻿import { ArrowLeftIcon } from "../components/icons";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
 import { friendLinksApi, type FriendLink } from "../api/friendLinks";
 import { extractErrorMessage } from "../api/auth";
 
 export default function FriendLinkPage() {
+  const location = useLocation();
   const [link, setLink] = useState<FriendLink | null>(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
@@ -40,7 +42,7 @@ export default function FriendLinkPage() {
   return (
     <main className="friend-link-page">
       <section className="friend-link-card">
-        <Link className="profile-back-link" to="/">← Quay lại trò chuyện</Link>
+        <Link className="profile-back-link" to="/settings" state={{ returnTo: location.state?.returnTo === "/profile" ? "/profile" : "/" }}><ArrowLeftIcon /><span>Quay lại cài đặt</span></Link>
         <h1>Link kết bạn</h1>
         <p className="friend-link-card__sub">Chia sẻ link hoặc mã QR này. Người nhận vẫn cần gửi lời mời kết bạn.</p>
         {error && <div className="alert alert-danger">{error}</div>}
@@ -61,3 +63,5 @@ export default function FriendLinkPage() {
     </main>
   );
 }
+
+

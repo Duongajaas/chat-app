@@ -1,5 +1,18 @@
 type IconProps = { size?: number };
 
+export function PinIcon({ size = 18 }: IconProps) {
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m9 3 6 0-1 6 4 4v2H6v-2l4-4-1-6ZM12 15v6" /></svg>;
+}
+export function ReplyIcon({ size = 18 }: IconProps) {
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m9 5-6 6 6 6M3 11h10a7 7 0 0 1 7 7" /></svg>;
+}
+export function ForwardIcon({ size = 18 }: IconProps) {
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m15 5 6 6-6 6M21 11H11a7 7 0 0 0-7 7" /></svg>;
+}
+export function ShieldIcon({ size = 18 }: IconProps) {
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 8 3v6c0 4-5 8-8 9-3-1-8-5-8-9V6l8-3Z" /><path d="m8 12 3 3 5-6" /></svg>;
+}
+
 export function ChatBubbleIcon({ size = 22 }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -112,4 +125,17 @@ export function MobileIcon({ size = 20 }: IconProps) {
       <line x1="11" y1="18" x2="13" y2="18" />
     </svg>
   );
+}
+
+export function ArrowLeftIcon({ size = 18 }: IconProps) {
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m10 5-7 7 7 7M3 12h18" /></svg>;
+}
+export function ArrowRightIcon({ size = 18 }: IconProps) {
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m14 5 7 7-7 7M3 12h18" /></svg>;
+}
+export function CloseIcon({ size = 18 }: IconProps) {
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="m6 6 12 12M6 18 18 6" /></svg>;
+}
+export function PlusCircleIcon({ size = 20 }: IconProps) {
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M8 12h8M12 8v8" /></svg>;
 }

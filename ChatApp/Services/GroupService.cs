@@ -52,10 +52,10 @@ public class GroupService(AppDbContext db)
             join u in db.Users on m.UserId equals u.Id
             where m.ConversationId == id && m.LeftAt == null
             orderby m.Role, m.JoinedAt, m.Id
-            select new { m.UserId, u.FullName, u.AvatarUrl, m.Role, m.JoinedAt }).Take(100).ToListAsync();
+            select new { m.UserId, u.Username, u.FullName, u.AvatarUrl, m.Role, m.JoinedAt }).Take(100).ToListAsync();
         return members.Select(m => new GroupMemberResponse(m.UserId, m.FullName, m.AvatarUrl, m.Role, m.JoinedAt,
             m.UserId != actorId && GroupPermissionMatrix.CanKick(actor.Role, m.Role),
-            m.UserId != actorId && actor.Role == MemberRole.Owner && m.Role != MemberRole.Owner)).ToList();
+            m.UserId != actorId && actor.Role == MemberRole.Owner && m.Role != MemberRole.Owner, m.Username)).ToList();
     }
 
     public async Task RenameAsync(Guid actorId, Guid id, string name)

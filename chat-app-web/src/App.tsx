@@ -8,7 +8,7 @@ import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import JoinGroupPage from "./pages/JoinGroupPage";
 import ChatPage from "./pages/ChatPage";
-import ProfilePage from "./pages/ProfilePage";
+import ProfilePage, { SettingsPage } from "./pages/ProfilePage";
 import DevicesPage from "./pages/DevicesPage";
 import BlockedUsersPage from "./pages/BlockedUsersPage";
 import FriendLinkPage from "./pages/FriendLinkPage";
@@ -27,6 +27,7 @@ export default function App() {
           <Route path="/" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
           <Route path="/join" element={<ProtectedRoute><JoinGroupPage /></ProtectedRoute>} />
           <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/devices" element={<ProtectedRoute><DevicesPage /></ProtectedRoute>} />
           <Route path="/blocked-users" element={<ProtectedRoute><BlockedUsersPage /></ProtectedRoute>} />
           <Route path="/friend-link" element={<ProtectedRoute><FriendLinkPage /></ProtectedRoute>} />

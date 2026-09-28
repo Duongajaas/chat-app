@@ -3,7 +3,7 @@ import type { Conversation } from "../types";
 
 export type GroupRole = "Owner" | "Admin" | "Member";
 export interface GroupMember {
-  userId: string; fullName: string; avatarUrl: string | null; role: GroupRole;
+  userId: string; username: string; fullName: string; avatarUrl: string | null; role: GroupRole;
   joinedAt: string; canKick: boolean; canChangeRole: boolean;
 }
 export interface GroupInvite {
@@ -11,6 +11,10 @@ export interface GroupInvite {
   expiresAt: string; revokedAt: string | null; code: string | null;
 }
 export const groupsApi = {
+  avatarIntent: (id: string) => apiClient.post<{ assetId: string; expiresAt: string; uploadUrl: string; fields: Record<string, string> }>(
+    `/conversations/${id}/avatar/upload-intent`).then(r => r.data),
+  setAvatar: (id: string, assetId: string, expectedVersion: number) =>
+    apiClient.put<Conversation>(`/conversations/${id}/avatar`, { assetId, expectedVersion }).then(r => r.data),
   members: (id: string) => apiClient.get<GroupMember[]>(`/conversations/${id}/members`).then(r => r.data),
   rename: (id: string, name: string) => apiClient.patch<Conversation>(`/conversations/${id}/group`, { name }).then(r => r.data),
   add: (id: string, userId: string) => apiClient.post(`/conversations/${id}/members`, { userId }),

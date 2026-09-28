@@ -22,6 +22,8 @@ public class Message
     public Guid? ReplyToMessageId { get; set; }
     public Guid? ForwardedFromMessageId { get; set; }
 
+    public bool IsForwarded { get; set; }
+    public string? RequestHash { get; set; }
     public MessageStatus Status { get; set; } = MessageStatus.Sent;
 
     public DateTime? EditedAt { get; set; }

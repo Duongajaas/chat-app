@@ -1,3 +1,4 @@
+﻿using ChatApp.Media;
 using ChatApp.Realtime;
 using ChatApp.RateLimiting;
 using Microsoft.AspNetCore.SignalR;
@@ -18,22 +19,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
-var envFilePaths = new[]
-{
-    Path.Combine(Directory.GetCurrentDirectory(), ".env"),
-    Path.Combine(Directory.GetCurrentDirectory(), "ChatApp", ".env")
-};
-
-foreach (var envFilePath in (Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") == "Development" ? envFilePaths.Distinct() : []))
-{
-    if (File.Exists(envFilePath))
-    {
-        DotNetEnv.Env.Load(envFilePath);
-        break;
-    }
-}
-
-var builder = WebApplication.CreateBuilder(args);
+var builder = ApplicationConfiguration.CreateBuilder(args);
 
 // ---------- Options ----------
 builder.Services.AddOptions<JwtOptions>().BindConfiguration(JwtOptions.SectionName)
@@ -65,10 +51,7 @@ builder.Services.AddOptions<RateLimitingOptions>().BindConfiguration(RateLimitin
 
 // ---------- DbContext ----------
 builder.Services.AddDbContext<AppDbContext>(options =>
-{
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"))
-            .UseSnakeCaseNamingConvention(); // Chuyển tên table/column sang snake_case, ví dụ: UserName -> user_name
-});
+    ApplicationConfiguration.ConfigureDatabase(options, builder.Configuration));
 
 // ---------- Services ----------
 builder.Services.AddScoped<IAuthService, AuthService>();
@@ -77,6 +60,9 @@ builder.Services.AddScoped<IGoogleAuthService, GoogleAuthService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<GroupService>();
+builder.Services.Configure<CloudinaryOptions>(builder.Configuration.GetSection("Cloudinary"));
+builder.Services.AddHttpClient<IAvatarStorage, CloudinaryAvatarStorage>(client => client.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddScoped<AvatarService>();
 builder.Services.AddScoped<IMessageService, MessageService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IFriendLinkService, FriendLinkService>();
@@ -298,8 +284,7 @@ builder.Services.AddRateLimiter(options =>
 });
 
 var app = builder.Build();
-if (string.IsNullOrWhiteSpace(app.Configuration.GetConnectionString("DefaultConnection")))
-    throw new InvalidOperationException("Database connection is required.");
+_ = ApplicationConfiguration.GetDatabaseConnection(app.Configuration);
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") });
 if (runtimeRole == "worker")
@@ -323,7 +308,8 @@ app.Use(async (context, next) =>
     {
         context.Response.StatusCode = ex.StatusCode;
         context.Response.ContentType = "application/json";
-        await context.Response.WriteAsJsonAsync(new { message = ex.Message, traceId = context.TraceIdentifier });
+        await context.Response.WriteAsJsonAsync(new { message = ex.Message, code = ex.Code,
+            reblockAllowedAt = ex.ReblockAllowedAt, remainingSeconds = ex.RemainingSeconds, traceId = context.TraceIdentifier });
     }
     catch (Exception ex)
     {
@@ -392,3 +378,4 @@ app.MapHub<ChatHub>("/hubs/chat", options => options.CloseOnAuthenticationExpira
 app.Run();
 
 public partial class Program { }
+
