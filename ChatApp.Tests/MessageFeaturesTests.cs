@@ -24,6 +24,7 @@ public class MessageFeaturesTests(PostgresFixture fixture) : IClassFixture<Postg
         await using var db = fixture.Open();
         var users = Enumerable.Range(0, 4).Select(_ => new User { Username = Guid.NewGuid().ToString("N"), FullName = "Features" }).ToArray();
         db.Users.AddRange(users);
+        db.RefreshTokens.AddRange(users.Select(u => new RefreshToken { UserId = u.Id, FamilyId = u.Id, TokenHash = Guid.NewGuid().ToString(), ExpiresAt = DateTime.UtcNow.AddDays(1) }));
         for (int i = 1; i < users.Length; i++)
         {
             var pair = new[] { users[0].Id, users[i].Id }.Order().ToArray();
@@ -132,6 +133,7 @@ public class MessageFeaturesTests(PostgresFixture fixture) : IClassFixture<Postg
         Guid target;
         await using (var db = fixture.Open())
         {
+            db.PrivateMediaAssets.Add(new PrivateMediaAsset { OwnerId = u[0].Id, StorageKey = "private/key", FileName = "secret.txt", ContentType = "text/plain", Length = 12, Uploaded = true });
             db.MessageAttachments.Add(new MessageAttachment { MessageId = source.Id, StorageKey = "private/key", FileName = "secret.txt" });
             await db.SaveChangesAsync();
             target = (await new ConversationService(db).CreateConversationAsync(u[0].Id,

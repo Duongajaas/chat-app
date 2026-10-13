@@ -1,4 +1,4 @@
-using ChatApp.Presence;
+﻿using ChatApp.Presence;
 using ChatApp.RateLimiting;
 
 namespace ChatApp.Realtime;
@@ -36,8 +36,10 @@ public static class RuntimeServices
         if (role != "api")
         {
             services.AddHostedService<OutboxWorker>();
+            services.AddHostedService<ChatApp.Calls.CallSweeperWorker>();
             services.AddHostedService<ChatApp.Media.AvatarCleanupWorker>();
         }
         return role;
     }
 }
+

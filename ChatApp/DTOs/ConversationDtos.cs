@@ -43,7 +43,10 @@ public record MessageResponse(
     AttachmentResponse[]? Attachments = null,
     string? MediaUrl = null,
     int? VoiceDuration = null,
-    string? WaveformPoints = null
+    string? WaveformPoints = null,
+    string Type = "Text",
+    string? SenderName = null,
+    string? SenderUsername = null
 );
 
 public record MessageListResponse(
@@ -65,7 +68,8 @@ public record SendMessageRequest(
     MentionInput[]? Mentions = null,
     string? MediaUrl = null,
     int? VoiceDuration = null,
-    string? WaveformPoints = null
+    string? WaveformPoints = null,
+    Guid? AssetId = null
 );
 
 public record SendMessagePayload(
@@ -75,9 +79,12 @@ public record SendMessagePayload(
     [MaxLength(20)] MentionInput[]? Mentions = null,
     string? MediaUrl = null,
     int? VoiceDuration = null,
-    string? WaveformPoints = null
+    string? WaveformPoints = null,
+    Guid? AssetId = null
 );
 
 public record MessageStateResponse(Guid Id, bool Deleted, bool Hidden);
 public record MessageStatesRequest([Required, MaxLength(100)] Guid[] Ids);
 public record ConversationPageResponse(List<ConversationSummaryResponse> Items, string? NextCursor);
+
+

@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using ChatApp.DTOs;
 using ChatApp.Models;
 using ChatApp.Services;
@@ -30,7 +30,7 @@ public class MediaMessageContractTests
     {
         var message = new Message { Content = "", MediaUrl = "https://example.test/audio.webm", VoiceDuration = 3, WaveformPoints = "[1,2]" };
         var sent = MessageService.ToResponse(message);
-        Assert.Equal(message.MediaUrl, sent.MediaUrl);
+        Assert.Null(sent.MediaUrl); // Legacy public URLs must never be exposed.
         Assert.Equal(3, sent.VoiceDuration);
         Assert.Equal("[1,2]", sent.WaveformPoints);
         message.DeletedAt = DateTime.UtcNow;

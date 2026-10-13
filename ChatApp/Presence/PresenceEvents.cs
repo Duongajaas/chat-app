@@ -1,5 +1,6 @@
 using ChatApp.Data;
 using ChatApp.Hubs;
+using ChatApp.Services;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
@@ -30,7 +31,7 @@ public sealed class PresenceEvents(AppDbContext db, IPresenceTracker presence, I
             await db.SaveChangesAsync(ct);
         }
         var audience = await Audience(userId).Select(id => id.ToString()).ToArrayAsync(ct);
-        await hub.Clients.Users(audience).SendAsync("UserPresenceChanged", new
+        await hub.Clients.Users(await SessionAccess.RecipientSessionsAsync(db, audience, ct)).SendAsync("UserPresenceChanged", new
         { UserId = userId, IsOnline = online, LastSeenAt = online ? null : subject.LastSeenAt }, ct);
         await tx.CommitAsync(ct);
     }

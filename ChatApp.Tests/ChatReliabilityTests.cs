@@ -20,7 +20,9 @@ public class ChatReliabilityTests(PostgresFixture fixture) : IClassFixture<Postg
     {
         await using var db = fixture.Open();
         var users = Enumerable.Range(0, 3).Select(_ => new User { Username = Guid.NewGuid().ToString("N"), FullName = "Test" }).ToArray();
-        db.Users.AddRange(users); await db.SaveChangesAsync();
+        db.Users.AddRange(users);
+        db.RefreshTokens.AddRange(users.Select(u => new RefreshToken { UserId = u.Id, FamilyId = u.Id, TokenHash = Guid.NewGuid().ToString(), ExpiresAt = DateTime.UtcNow.AddDays(1) }));
+        await db.SaveChangesAsync();
         foreach (var other in users.Skip(1))
         {
             var pair = new[] { users[0].Id, other.Id }.Order().ToArray();

@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using ChatApp.Common;
 using ChatApp.Data;
 using ChatApp.DTOs;
@@ -105,7 +105,7 @@ public class ConversationService(AppDbContext db) : IConversationService
                 c.Type, member.UnreadCount, c.CreatedAt, c.UpdatedAt, last?.Id, last?.CreatedAt,
                 peer.HasValue && blocked.Contains(peer.Value), peer,
                 last == null ? null : last.DeletedAt != null ? "Tin nhắn đã được thu hồi" :
-                    !string.IsNullOrWhiteSpace(last.Content) ? last.Content :
+                    last.Type == MessageType.CallLog ? "Cuộc gọi" : !string.IsNullOrWhiteSpace(last.Content) ? last.Content :
                     last.VoiceDuration != null ? "Tin nhắn thoại" : last.MediaUrl != null ? "Media" : null,
                 active && member.Role is MemberRole.Admin or MemberRole.Owner, member.HiddenAt != null, member.LeftAt != null,
                 active ? member.Role : null, active && c.Type == ConversationType.Group ? GroupPermissionMatrix.Permissions(member.Role) : [],
@@ -172,3 +172,4 @@ public class ConversationService(AppDbContext db) : IConversationService
     public Task LeaveConversationAsync(Guid userId, Guid conversationId) =>
         new GroupService(db).RemoveAsync(userId, conversationId, userId, false);
 }
+

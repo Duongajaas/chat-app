@@ -22,6 +22,25 @@ namespace ChatApp.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("ChatApp.Models.ActiveCallSlot", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.Property<Guid>("CallSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("call_session_id");
+
+                    b.HasKey("UserId")
+                        .HasName("pk_active_call_slots");
+
+                    b.HasIndex("CallSessionId")
+                        .HasDatabaseName("ix_active_call_slots_call_session_id");
+
+                    b.ToTable("active_call_slots", (string)null);
+                });
+
             modelBuilder.Entity("ChatApp.Models.AuditLog", b =>
                 {
                     b.Property<Guid>("Id")
@@ -220,21 +239,53 @@ namespace ChatApp.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<Guid?>("AuthSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("auth_session_id");
+
                     b.Property<Guid>("CallSessionId")
                         .HasColumnType("uuid")
                         .HasColumnName("call_session_id");
+
+                    b.Property<string>("ConnectionId")
+                        .HasColumnType("text")
+                        .HasColumnName("connection_id");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<string>("CredentialHash")
+                        .HasColumnType("text")
+                        .HasColumnName("credential_hash");
+
+                    b.Property<long>("EndpointGeneration")
+                        .HasColumnType("bigint")
+                        .HasColumnName("endpoint_generation");
+
+                    b.Property<Guid?>("EndpointId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("endpoint_id");
+
                     b.Property<DateTime?>("JoinedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("joined_at");
 
+                    b.Property<DateTime?>("LastHeartbeatAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_heartbeat_at");
+
+                    b.Property<DateTime?>("LeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lease_expires_at");
+
                     b.Property<DateTime?>("LeftAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("left_at");
+
+                    b.Property<DateTime?>("MediaConnectedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("media_connected_at");
 
                     b.Property<int>("Status")
                         .HasColumnType("integer")
@@ -272,6 +323,18 @@ namespace ChatApp.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("caller_id");
 
+                    b.Property<Guid?>("ClientCallId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("client_call_id");
+
+                    b.Property<DateTime?>("ConnectDeadlineAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("connect_deadline_at");
+
+                    b.Property<DateTime?>("ConnectedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("connected_at");
+
                     b.Property<Guid?>("ConversationId")
                         .HasColumnType("uuid")
                         .HasColumnName("conversation_id");
@@ -288,6 +351,18 @@ namespace ChatApp.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("ended_at");
 
+                    b.Property<string>("EndedReason")
+                        .HasColumnType("text")
+                        .HasColumnName("ended_reason");
+
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<int>("NegotiationEpoch")
+                        .HasColumnType("integer")
+                        .HasColumnName("negotiation_epoch");
+
                     b.Property<string>("Provider")
                         .IsRequired()
                         .HasColumnType("text")
@@ -296,6 +371,18 @@ namespace ChatApp.Migrations
                     b.Property<string>("ProviderRoomId")
                         .HasColumnType("text")
                         .HasColumnName("provider_room_id");
+
+                    b.Property<DateTime?>("RecoveryDeadlineAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("recovery_deadline_at");
+
+                    b.Property<string>("RequestHash")
+                        .HasColumnType("text")
+                        .HasColumnName("request_hash");
+
+                    b.Property<int>("RestartCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("restart_count");
 
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("timestamp with time zone")
@@ -308,6 +395,10 @@ namespace ChatApp.Migrations
                     b.Property<int>("Type")
                         .HasColumnType("integer")
                         .HasColumnName("type");
+
+                    b.Property<long>("Version")
+                        .HasColumnType("bigint")
+                        .HasColumnName("version");
 
                     b.HasKey("Id")
                         .HasName("pk_call_sessions");
@@ -323,6 +414,16 @@ namespace ChatApp.Migrations
 
                     b.HasIndex("Status")
                         .HasDatabaseName("ix_call_sessions_status");
+
+                    b.HasIndex("CallerId", "ClientCallId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_call_sessions_caller_id_client_call_id");
+
+                    b.HasIndex("Status", "ConnectDeadlineAt")
+                        .HasDatabaseName("ix_call_sessions_status_connect_deadline_at");
+
+                    b.HasIndex("Status", "ExpiresAt")
+                        .HasDatabaseName("ix_call_sessions_status_expires_at");
 
                     b.ToTable("call_sessions", (string)null);
                 });
@@ -847,6 +948,10 @@ namespace ChatApp.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<Guid?>("CallSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("call_session_id");
+
                     b.Property<Guid>("ClientMessageId")
                         .HasColumnType("uuid")
                         .HasColumnName("client_message_id");
@@ -878,6 +983,7 @@ namespace ChatApp.Migrations
                     b.Property<bool>("IsForwarded")
                         .HasColumnType("boolean")
                         .HasColumnName("is_forwarded");
+
                     b.Property<string>("MediaUrl")
                         .HasColumnType("text")
                         .HasColumnName("media_url");
@@ -919,6 +1025,10 @@ namespace ChatApp.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_messages");
+
+                    b.HasIndex("CallSessionId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_messages_call_session_id");
 
                     b.HasIndex("DeletedAt")
                         .HasDatabaseName("ix_messages_deleted_at");
@@ -1401,6 +1511,60 @@ namespace ChatApp.Migrations
                     b.ToTable("pinned_messages", (string)null);
                 });
 
+            modelBuilder.Entity("ChatApp.Models.PrivateMediaAsset", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("content_type");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("file_name");
+
+                    b.Property<long>("Length")
+                        .HasColumnType("bigint")
+                        .HasColumnName("length");
+
+                    b.Property<Guid>("OwnerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_id");
+
+                    b.Property<string>("StorageKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("storage_key");
+
+                    b.Property<bool>("Uploaded")
+                        .HasColumnType("boolean")
+                        .HasColumnName("uploaded");
+
+                    b.HasKey("Id")
+                        .HasName("pk_private_media_assets");
+
+                    b.HasIndex("StorageKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_private_media_assets_storage_key");
+
+                    b.HasIndex("OwnerId", "CreatedAt")
+                        .HasDatabaseName("ix_private_media_assets_owner_id_created_at");
+
+                    b.ToTable("private_media_assets", (string)null);
+                });
+
             modelBuilder.Entity("ChatApp.Models.RefreshToken", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1744,6 +1908,23 @@ namespace ChatApp.Migrations
                         .HasDatabaseName("ix_user_devices_user_id_device_token");
 
                     b.ToTable("user_devices", (string)null);
+                });
+
+            modelBuilder.Entity("ChatApp.Models.ActiveCallSlot", b =>
+                {
+                    b.HasOne("ChatApp.Models.CallSession", null)
+                        .WithMany()
+                        .HasForeignKey("CallSessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_active_call_slots_call_sessions_call_session_id");
+
+                    b.HasOne("ChatApp.Models.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_active_call_slots_users_user_id");
                 });
 
             modelBuilder.Entity("ChatApp.Models.AuditLog", b =>
@@ -2161,6 +2342,16 @@ namespace ChatApp.Migrations
                         .HasForeignKey("PinnedBy")
                         .OnDelete(DeleteBehavior.SetNull)
                         .HasConstraintName("fk_pinned_messages_users_pinned_by");
+                });
+
+            modelBuilder.Entity("ChatApp.Models.PrivateMediaAsset", b =>
+                {
+                    b.HasOne("ChatApp.Models.User", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_private_media_assets_users_owner_id");
                 });
 
             modelBuilder.Entity("ChatApp.Models.RefreshToken", b =>

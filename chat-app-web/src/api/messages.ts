@@ -1,5 +1,5 @@
-﻿import { apiClient } from "./client";
-import type { ChatMessage, MessageListResponse } from "../types";
+import { apiClient } from "./client";
+import type { ChatMessage, MessageListResponse, PinnedMessage } from "../types";
 
 export const messagesApi = {
   reconcile: (id: string, items: import("../realtime/sendQueue").QueuePayload[]) =>
@@ -21,7 +21,7 @@ export const messagesApi = {
     apiClient.post<ChatMessage>(`/conversations/${conversationId}/messages`, payload).then((r) => r.data),
 
   batch: (conversationId: string, ids: string[]) => apiClient.post<ChatMessage[]>(`/conversations/${conversationId}/messages/batch`, { ids }).then(r => r.data),
-  pins: (id: string, signal?: AbortSignal) => apiClient.get<Array<{ id: string; message: ChatMessage }>>(`/conversations/${id}/pins`, { signal }).then(r => r.data),
+  pins: (id: string, signal?: AbortSignal) => apiClient.get<PinnedMessage[]>(`/conversations/${id}/pins`, { signal }).then(r => r.data),
   pin: (id: string, messageId: string) => apiClient.put(`/conversations/${id}/pins/${messageId}`),
   unpin: (id: string, messageId: string) => apiClient.delete(`/conversations/${id}/pins/${messageId}`),
   mentions: (id: string) => apiClient.get<ChatMessage[]>(`/conversations/${id}/mentions`).then(r => r.data),

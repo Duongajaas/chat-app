@@ -48,17 +48,24 @@ public class AuthService : IAuthService
             AuthProvider = AuthProvider.Local
         };
 
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        await SessionAccess.LockAsync(_db, user.Id);
         _db.Users.Add(user);
         await _db.SaveChangesAsync();
 
         var deviceId = await UpsertDeviceAsync(user, request.Device);
 
-        return await IssueTokensAsync(user, ipAddress, userAgent, deviceId);
+        var result = await IssueTokensAsync(user, ipAddress, userAgent, deviceId);
+        await transaction.CommitAsync();
+        return result;
     }
 
     public async Task<AuthResult> LoginAsync(LoginRequest request, string? ipAddress, string? userAgent)
     {
         var username = request.Username.Trim().ToLowerInvariant();
+        var id = await _db.Users.Where(u => u.Username == username).Select(u => (Guid?)u.Id).SingleOrDefaultAsync();
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        if (id.HasValue) await SessionAccess.LockAsync(_db, id.Value);
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Username == username && u.DeletedAt == null);
 
         // Không tiết lộ "user không tồn tại" hay "sai mật khẩu" — tránh user enumeration
@@ -88,6 +95,7 @@ public class AuthService : IAuthService
             }
 
             await _db.SaveChangesAsync();
+            await transaction.CommitAsync();
             throw AppException.Unauthorized(invalidCredentialsMessage);
         }
 
@@ -99,12 +107,19 @@ public class AuthService : IAuthService
 
         var deviceId = await UpsertDeviceAsync(user, request.Device);
 
-        return await IssueTokensAsync(user, ipAddress, userAgent, deviceId);
+        var result = await IssueTokensAsync(user, ipAddress, userAgent, deviceId);
+        await transaction.CommitAsync();
+        return result;
     }
 
     public async Task<AuthResult> GoogleLoginAsync(GoogleLoginRequest request, string? ipAddress, string? userAgent)
     {
         var payload = await _googleAuthService.VerifyIdTokenAsync(request.IdToken);
+        if (!payload.EmailVerified || string.IsNullOrWhiteSpace(payload.Email) || string.IsNullOrWhiteSpace(payload.GoogleId))
+            throw AppException.Unauthorized("Google chưa xác minh email của tài khoản này.");
+
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        await ConversationLock.AcquireKeyAsync(_db, "google-sub:" + payload.GoogleId);
 
         var user = await _db.Users.FirstOrDefaultAsync(u => u.GoogleId == payload.GoogleId);
 
@@ -115,7 +130,7 @@ public class AuthService : IAuthService
 
             if (user is not null)
             {
-                user.GoogleId = payload.GoogleId;
+                throw AppException.Conflict("Email đã có tài khoản. Hãy đăng nhập bằng phương thức hiện tại hoặc đặt lại mật khẩu; không thể tự động liên kết Google.");
             }
             else
             {
@@ -134,7 +149,9 @@ public class AuthService : IAuthService
             }
         }
 
-        if (!user.IsActive)
+        await SessionAccess.LockAsync(_db, user.Id);
+        if (_db.Entry(user).State != EntityState.Added) await _db.Entry(user).ReloadAsync();
+        if (!user.IsActive || user.DeletedAt != null)
             throw AppException.Forbidden("Tài khoản đã bị vô hiệu hóa.");
 
         user.LastSeenAt = DateTime.UtcNow;
@@ -142,12 +159,18 @@ public class AuthService : IAuthService
 
         var deviceId = await UpsertDeviceAsync(user, request.Device);
 
-        return await IssueTokensAsync(user, ipAddress, userAgent, deviceId);
+        var result = await IssueTokensAsync(user, ipAddress, userAgent, deviceId);
+        await transaction.CommitAsync();
+        return result;
     }
 
     public async Task<AuthResult> RefreshTokenAsync(string rawRefreshToken, string? ipAddress, string? userAgent)
     {
         var tokenHash = _tokenService.HashToken(rawRefreshToken);
+        var owner = await _db.RefreshTokens.Where(t => t.TokenHash == tokenHash).Select(t => (Guid?)t.UserId).SingleOrDefaultAsync();
+        if (owner == null) throw AppException.Unauthorized("Phiên đăng nhập không hợp lệ.");
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        await SessionAccess.LockAsync(_db, owner.Value);
         var now = DateTime.UtcNow;
 
         var existingToken = await _db.RefreshTokens
@@ -159,19 +182,19 @@ public class AuthService : IAuthService
 
         if (existingToken.UsedAt is not null)
         {
-            await RevokeFamilyAsync(existingToken.FamilyId, "refresh-token-reuse");
+            await RevokeFamilyAsync(existingToken.FamilyId, "refresh-token-reuse", existingToken.UserId);
+            await transaction.CommitAsync();
             throw AppException.Unauthorized("Phiên đăng nhập không còn hợp lệ. Vui lòng đăng nhập lại.");
         }
 
         if (existingToken.RevokedAt is not null || existingToken.ExpiresAt <= now)
             throw AppException.Unauthorized("Refresh token không hợp lệ hoặc đã hết hạn.");
 
-        if (!existingToken.User.IsActive)
+        if (!existingToken.User.IsActive || existingToken.User.DeletedAt != null ||
+            !await SessionAccess.Active(_db).AnyAsync(t => t.FamilyId == existingToken.FamilyId))
             throw AppException.Forbidden("Tài khoản đã bị vô hiệu hóa.");
 
-        await using var transaction = await _db.Database.BeginTransactionAsync();
-
-        var accessToken = _tokenService.GenerateAccessToken(existingToken.User);
+        var accessToken = _tokenService.GenerateAccessToken(existingToken.User, existingToken.FamilyId);
         var refreshToken = _tokenService.GenerateRefreshToken();
         var newRefreshToken = new RefreshToken
         {
@@ -196,8 +219,8 @@ public class AuthService : IAuthService
 
         if (consumedRows != 1)
         {
-            await transaction.RollbackAsync();
-            await RevokeFamilyAsync(existingToken.FamilyId, "refresh-token-concurrent-consume");
+            await RevokeFamilyAsync(existingToken.FamilyId, "refresh-token-concurrent-consume", existingToken.UserId);
+            await transaction.CommitAsync();
             throw AppException.Unauthorized("Phiên đăng nhập không còn hợp lệ. Vui lòng đăng nhập lại.");
         }
 
@@ -220,11 +243,12 @@ public class AuthService : IAuthService
 
         // Chỉ thu hồi refresh token của THIẾT BỊ HIỆN TẠI, không đụng tới các thiết bị khác
         var token = await _db.RefreshTokens.FirstOrDefaultAsync(rt => rt.TokenHash == tokenHash);
-        if (token is not null && token.RevokedAt is null)
+        if (token is not null)
         {
-            token.RevokedAt = DateTime.UtcNow;
-            token.RevocationReason = "logout";
-            await _db.SaveChangesAsync();
+            await using var transaction = await _db.Database.BeginTransactionAsync();
+            await SessionAccess.LockAsync(_db, token.UserId);
+            await RevokeFamilyAsync(token.FamilyId, "logout", token.UserId);
+            await transaction.CommitAsync();
         }
     }
 
@@ -253,6 +277,10 @@ public class AuthService : IAuthService
     public async Task ResetPasswordAsync(ResetPasswordRequest request)
     {
         var tokenHash = _tokenService.HashToken(request.Token);
+        var owner = await _db.PasswordResetTokens.Where(t => t.TokenHash == tokenHash).Select(t => (Guid?)t.UserId).SingleOrDefaultAsync();
+        if (owner == null) throw AppException.BadRequest("Token reset password không hợp lệ.");
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        await SessionAccess.LockAsync(_db, owner.Value);
 
         var resetToken = await _db.PasswordResetTokens
             .Include(t => t.User)
@@ -278,13 +306,16 @@ public class AuthService : IAuthService
         }
 
         await _db.SaveChangesAsync();
+        await _db.PasswordResetTokens.Where(t => t.UserId == owner && t.UsedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.UsedAt, (DateTime?)DateTime.UtcNow));
+        await transaction.CommitAsync();
     }
 
     private async Task<AuthResult> IssueTokensAsync(User user, string? ipAddress, string? userAgent, Guid? deviceId = null)
     {
-        var accessToken = _tokenService.GenerateAccessToken(user);
-        var refreshToken = _tokenService.GenerateRefreshToken();
         var familyId = Guid.NewGuid();
+        var accessToken = _tokenService.GenerateAccessToken(user, familyId);
+        var refreshToken = _tokenService.GenerateRefreshToken();
 
         _db.RefreshTokens.Add(new RefreshToken
         {
@@ -308,12 +339,12 @@ public class AuthService : IAuthService
         );
     }
 
-    private async Task RevokeFamilyAsync(Guid familyId, string reason)
+    private async Task RevokeFamilyAsync(Guid familyId, string reason, Guid userId)
     {
         var now = DateTime.UtcNow;
 
         await _db.RefreshTokens
-            .Where(rt => rt.FamilyId == familyId && rt.RevokedAt == null)
+            .Where(rt => rt.UserId == userId && rt.FamilyId == familyId && rt.RevokedAt == null)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(rt => rt.RevokedAt, (DateTime?)now)
                 .SetProperty(rt => rt.RevocationReason, (string?)reason));
@@ -404,6 +435,8 @@ public class AuthService : IAuthService
 
     public async Task RevokeDeviceAsync(Guid userId, Guid deviceId)
     {
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        await SessionAccess.LockAsync(_db, userId);
         var device = await _db.UserDevices.FirstOrDefaultAsync(d => d.Id == deviceId && d.UserId == userId);
         if (device is null)
             throw AppException.NotFound("Thiết bị không tồn tại.");
@@ -421,6 +454,7 @@ public class AuthService : IAuthService
 
         device.IsActive = false;
         await _db.SaveChangesAsync();
+        await transaction.CommitAsync();
     }
 
     public async Task<User?> GetUserByIdAsync(Guid userId)

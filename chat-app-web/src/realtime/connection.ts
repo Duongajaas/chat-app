@@ -168,6 +168,8 @@ export function startChatHub(nextUserId: string) {
     await c.invoke("RefreshPresence");
   });
   const current = () => connection === c && version === getSessionVersion();
+  c.on("CallStateChanged", () => { if (current()) window.dispatchEvent(new Event("call:changed")); });
+  c.on("ReceiveSignal", (detail: unknown) => { if (current()) window.dispatchEvent(new CustomEvent("call:signal", { detail })); });
   c.on("PresenceSnapshot", (ids: string[]) => { if (current()) usePresenceStore.getState().setOnlineUserIds(ids); });
   c.on("UserPresenceChanged", (p: { userId: string; isOnline: boolean }) => {
     if (current()) usePresenceStore.getState().setUserPresence(p.userId, p.isOnline);
@@ -259,3 +261,5 @@ export async function joinConversation(id: string) {
 export async function leaveConversation(id: string) { subscriptions.delete(id); }
 export async function sendTyping(id: string, typing: boolean) { await (await connected()).invoke("Typing", id, typing); }
 export async function markConversationAsRead(id: string, sequence: number) { await (await connected()).invoke("MarkAsRead", id, sequence); }
+
+export async function invokeCall<T = unknown>(method: string, ...args: unknown[]): Promise<T> { return (await connected()).invoke<T>(method, ...args); }

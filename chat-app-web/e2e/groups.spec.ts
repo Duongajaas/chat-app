@@ -1,4 +1,4 @@
-﻿import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 async function groupApi(page: Page, role: "Owner" | "Member" = "Owner") {
   const token = `header.${Buffer.from(JSON.stringify({ exp: 4102444800 })).toString("base64url")}.signature`;
@@ -122,7 +122,7 @@ test("member can pin, send reply mentions and apply an internal avatar asset", a
   await original.getByRole("button", { name: "Bỏ ghim tin nhắn", exact: true }).click();
   await expect(original.getByRole("button", { name: "Ghim tin nhắn", exact: true })).toHaveAttribute("aria-pressed", "false");
   await original.getByRole("button", { name: "Ghim tin nhắn", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Bỏ ghim", exact: true })).toBeVisible();
+  await expect(page.locator(".pins-bar__summary")).toContainText("Lịch sử được phép");
   await original.click({ button: "right" });
   await original.getByRole("button", { name: "Trả lời", exact: true }).click();
   const composer = page.getByPlaceholder("Nhắn tin tới Nhóm kiểm thử");

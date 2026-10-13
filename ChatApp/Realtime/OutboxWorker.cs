@@ -1,6 +1,7 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using ChatApp.Data;
 using ChatApp.Hubs;
+using ChatApp.Services;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
@@ -45,6 +46,13 @@ public class OutboxWorker(IServiceScopeFactory scopes, IHubContext<ChatHub> hub,
             var recipients = item.TargetUserId is Guid userId
                 ? new[] { userId.ToString() }
                 : await ConversationEvents.RecipientsAsync(db, item.ConversationId, ct);
+            if (item.EventName == "CallStateChanged")
+            {
+                var callId = JsonSerializer.Deserialize<JsonElement>(item.Payload).GetProperty("callId").GetGuid();
+                var allowed = await db.CallParticipants.Where(p => p.CallSessionId == callId && p.UserId != null)
+                    .Select(p => p.UserId!.Value.ToString()).ToListAsync(ct);
+                recipients = recipients.Intersect(allowed).ToArray();
+            }
             // Do not replay original content after a message was recalled before delivery.
             var payload = JsonSerializer.Deserialize<JsonElement>(item.Payload);
             if ((item.EventName is "ReceiveMessage" or "MessageAvailable" or "MentionReceived") &&
@@ -85,7 +93,7 @@ public class OutboxWorker(IServiceScopeFactory scopes, IHubContext<ChatHub> hub,
                 // Deliberately does not inspect MutedUntil: an explicit mention overrides mute.
             }
             if (recipients.Length > 0)
-                await hub.Clients.Users(recipients).SendAsync(item.EventName, payload, ct);
+                await hub.Clients.Users(await SessionAccess.RecipientSessionsAsync(db, recipients, ct)).SendAsync(item.EventName, payload, ct);
             item.ProcessedAt = DateTime.UtcNow;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -99,3 +107,4 @@ public class OutboxWorker(IServiceScopeFactory scopes, IHubContext<ChatHub> hub,
         await tx.CommitAsync(ct);
     }
 }
+

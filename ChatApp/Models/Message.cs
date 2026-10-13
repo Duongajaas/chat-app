@@ -2,6 +2,7 @@ namespace ChatApp.Models;
 
 public class Message
 {
+    public Guid? CallSessionId { get; set; }
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid ConversationId { get; set; }
     public Guid? SenderId { get; set; }

@@ -9,6 +9,7 @@ public class AppDbContext : DbContext
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
     public DbSet<AvatarAsset> AvatarAssets => Set<AvatarAsset>();
+    public DbSet<PrivateMediaAsset> PrivateMediaAssets => Set<PrivateMediaAsset>();
     public DbSet<GroupOperation> GroupOperations => Set<GroupOperation>();
     public DbSet<OutboxEvent> OutboxEvents => Set<OutboxEvent>();
     public DbSet<User> Users => Set<User>();
@@ -37,6 +38,7 @@ public class AppDbContext : DbContext
     public DbSet<ScheduledMessage> ScheduledMessages => Set<ScheduledMessage>();
 
     public DbSet<CallSession> CallSessions => Set<CallSession>();
+    public DbSet<ActiveCallSlot> ActiveCallSlots => Set<ActiveCallSlot>();
     public DbSet<CallParticipant> CallParticipants => Set<CallParticipant>();
 
     public DbSet<Notification> Notifications => Set<Notification>();
@@ -47,6 +49,15 @@ public class AppDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.Entity<PrivateMediaAsset>(e =>
+        {
+            e.HasIndex(a => a.StorageKey).IsUnique();
+            e.HasIndex(a => new { a.OwnerId, a.CreatedAt });
+            e.HasOne<User>().WithMany().HasForeignKey(a => a.OwnerId).OnDelete(DeleteBehavior.Restrict);
+            e.Property(a => a.StorageKey).HasMaxLength(100);
+            e.Property(a => a.FileName).HasMaxLength(200);
+            e.Property(a => a.ContentType).HasMaxLength(100);
+        });
         modelBuilder.Entity<BlockCooldown>(e => {
             e.HasKey(x => new { x.ActorId, x.TargetId });
             e.HasOne<User>().WithMany().HasForeignKey(x => x.ActorId).OnDelete(DeleteBehavior.Cascade);
@@ -287,9 +298,20 @@ public class AppDbContext : DbContext
         });
 
         // ---------- Call ----------
+        modelBuilder.Entity<Message>().HasIndex(x => x.CallSessionId).IsUnique();
+        modelBuilder.Entity<ActiveCallSlot>(e =>
+        {
+            e.ToTable("active_call_slots");
+            e.HasKey(x => x.UserId);
+            e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<CallSession>().WithMany().HasForeignKey(x => x.CallSessionId).OnDelete(DeleteBehavior.Cascade);
+        });
         modelBuilder.Entity<CallSession>(e =>
         {
             e.ToTable("call_sessions");
+            e.HasIndex(x => new { x.CallerId, x.ClientCallId }).IsUnique();
+            e.HasIndex(x => new { x.Status, x.ExpiresAt });
+            e.HasIndex(x => new { x.Status, x.ConnectDeadlineAt });
             e.HasIndex(x => x.ConversationId);
             e.HasIndex(x => x.CallerId);
             e.HasIndex(x => x.StartedAt);

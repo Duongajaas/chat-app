@@ -9,3 +9,11 @@ export function collectMentions(content: string, members: { userId: string; user
   }
   return result;
 }
+
+/** Keep the draft intact and do not duplicate a mention already present in the text. */
+export function prependReplyMention(content: string, member: { userId: string; username: string } | undefined, currentUserId?: string) {
+  if (!member?.username || member.userId === currentUserId) return content;
+  if (collectMentions(content, [member]).length) return content;
+  const next = `@${member.username} ${content}`;
+  return next.length <= 4000 ? next : content;
+}

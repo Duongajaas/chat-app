@@ -33,20 +33,23 @@ public class MessageReader(AppDbContext db)
         var replyIds = rows.Where(m => m.DeletedAt == null && m.ReplyToMessageId != null).Select(m => m.ReplyToMessageId!.Value).Distinct().ToArray();
         var originals = await Visible(user, conversation).AsNoTracking()
             .Where(m => replyIds.Contains(m.Id) && m.DeletedAt == null).ToDictionaryAsync(m => m.Id, ct);
-        var senderIds = originals.Values.Where(m => m.SenderId != null).Select(m => m.SenderId!.Value).ToArray();
-        var names = await db.Users.Where(u => senderIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, u => u.FullName, ct);
+        var senderIds = originals.Values.Concat(rows).Where(m => m.SenderId != null).Select(m => m.SenderId!.Value).Distinct().ToArray();
+        var senders = await db.Users.Where(u => senderIds.Contains(u.Id)).Select(u => new { u.Id, u.FullName, u.Username }).ToDictionaryAsync(u => u.Id, ct);
         var mentions = await db.MessageMentions.Where(m => ids.Contains(m.MessageId)).ToListAsync(ct);
-        var attachments = await db.MessageAttachments.Where(a => ids.Contains(a.MessageId)).ToListAsync(ct);
+        var attachments = await db.MessageAttachments.Where(a => ids.Contains(a.MessageId) &&
+            db.PrivateMediaAssets.Any(asset => asset.StorageKey == a.StorageKey && asset.Uploaded)).ToListAsync(ct);
         return rows.Select(m => {
             ReplyPreviewResponse? reply = null;
             if (m.DeletedAt == null && m.ReplyToMessageId is Guid replyId)
             {
                 var original = originals.GetValueOrDefault(replyId);
                 reply = original == null ? new(replyId, null, null, false) :
-                    new(replyId, original.SenderId is Guid sender ? names.GetValueOrDefault(sender) : null,
-                        original.Content is { Length: > 80 } text ? text[..80] + "…" : original.Content, true, original.Sequence);
+                    new(replyId, original.SenderId is Guid sender ? senders.GetValueOrDefault(sender)?.FullName : null,
+                        original.Type == MessageType.CallLog ? "Cuộc gọi" : original.Content is { Length: > 80 } text ? text[..80] + "…" : original.Content, true, original.Sequence);
             }
             return MessageService.ToResponse(m) with {
+                SenderName = m.SenderId is Guid author ? senders.GetValueOrDefault(author)?.FullName : null,
+                SenderUsername = m.SenderId is Guid authorId ? senders.GetValueOrDefault(authorId)?.Username : null,
                 ReplyToMessageId = m.DeletedAt == null ? m.ReplyToMessageId : null,
                 ReplyPreview = reply, IsForwarded = m.DeletedAt == null && m.IsForwarded,
                 Mentions = mentions.Where(x => x.MessageId == m.Id).OrderBy(x => x.Start)
@@ -57,3 +60,4 @@ public class MessageReader(AppDbContext db)
         }).ToList();
     }
 }
+

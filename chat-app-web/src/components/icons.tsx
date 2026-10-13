@@ -139,3 +139,10 @@ export function CloseIcon({ size = 18 }: IconProps) {
 export function PlusCircleIcon({ size = 20 }: IconProps) {
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M8 12h8M12 8v8" /></svg>;
 }
+
+export function ChevronDownIcon({ size = 14 }: IconProps) {
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>;
+}
+export function QuoteIcon({ size = 14 }: IconProps) {
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 13h6V7H3v6c0 4 2 5 5 5M15 13h6V7h-6v6c0 4 2 5 5 5"/></svg>;
+}
