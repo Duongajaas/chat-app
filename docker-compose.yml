@@ -1,4 +1,4 @@
-# Shared Redis state; keep one worker and configure nginx affinity before scaling API replicas.
+﻿# Shared Redis state; keep one worker and configure nginx affinity before scaling API replicas.
 name: chatapp
 x-api-environment: &api-environment
   ASPNETCORE_ENVIRONMENT: Production
@@ -19,6 +19,10 @@ x-api-environment: &api-environment
   Cloudinary__ApiKey: ${CLOUDINARY_API_KEY:-}
   Cloudinary__ApiSecret: ${CLOUDINARY_API_SECRET:-}
   Cloudinary__AvatarUploadPreset: ${CLOUDINARY_AVATAR_UPLOAD_PRESET:-}
+  Calls__TurnUrls__0: ${TURN_UDP_URL:-}
+  Calls__TurnUrls__1: ${TURN_TCP_URL:-}
+  Calls__TurnUrls__2: ${TURN_TLS_URL:-}
+  Calls__TurnSecret: ${TURN_SECRET:-}
   GoogleAuth__ClientId: ${GOOGLE_CLIENT_ID}
   ReverseProxy__KnownProxies__0: 172.30.90.10
   Smtp__Host: ${SMTP_HOST}
@@ -106,3 +110,4 @@ networks:
       config: [{ subnet: 172.30.90.0/24 }]
 volumes:
   database:
+

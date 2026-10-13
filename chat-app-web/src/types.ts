@@ -84,7 +84,12 @@ export interface Conversation {
   lastMessageId?: string | null;
 }
 
+export interface PinnedMessage { id: string; pinnedBy?: string | null; createdAt: string; message: ChatMessage; }
+
 export interface ChatMessage {
+  senderName?: string | null;
+  senderUsername?: string | null;
+  type?: string;
   deliveryState?: import("./realtime/sendQueue").DeliveryState;
   deliveryError?: string;
   pendingSourceMessageId?: string;
@@ -94,7 +99,7 @@ export interface ChatMessage {
   isForwarded?: boolean;
   mentions?: import("./utils/mentions").Mention[];
   pendingMentions?: import("./utils/mentions").MentionInput[];
-  mediaUrl?: string | null;
+  assetId?: string | null; mediaUrl?: string | null;
   voiceDuration?: number | null;
   waveformPoints?: string | null;
   attachments?: { id: string; fileName: string | null; fileType: string | null; fileSize: number | null }[];

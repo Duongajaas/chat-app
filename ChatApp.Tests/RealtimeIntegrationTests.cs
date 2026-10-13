@@ -20,6 +20,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Xunit;
+using Microsoft.Extensions.Logging;
 
 namespace ChatApp.Tests;
 
@@ -30,6 +31,7 @@ public class RealtimeIntegrationTests(PostgresFixture fixture) : IClassFixture<P
     private WebApplicationFactory<Program> Factory(string? redisPrefix = null, bool runOutbox = true, string? role = null) => new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
     {
         builder.UseEnvironment("Testing");
+        builder.ConfigureLogging(log => { log.ClearProviders(); log.AddConsole(); });
         // These settings select services during Program startup, before ConfigureAppConfiguration runs.
         builder.UseSetting("Redis:Enabled", (redisPrefix != null).ToString());
         builder.UseSetting("Runtime:Role", role ?? (runOutbox ? "all" : "api"));
@@ -47,7 +49,7 @@ public class RealtimeIntegrationTests(PostgresFixture fixture) : IClassFixture<P
             ["Logging:LogLevel:Default"] = "Warning"
         }));
     });
-    private static string Token(User user) => new TokenService(Microsoft.Extensions.Options.Options.Create(new JwtOptions { SecretKey = Key, Issuer = "tests", Audience = "tests" })).GenerateAccessToken(user).Token;
+    private static string Token(User user) => new TokenService(Microsoft.Extensions.Options.Options.Create(new JwtOptions { SecretKey = Key, Issuer = "tests", Audience = "tests" })).GenerateAccessToken(user, user.Id).Token;
     private static HttpClient Client(WebApplicationFactory<Program> factory, User? user = null)
     {
         var client = factory.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
@@ -61,11 +63,33 @@ public class RealtimeIntegrationTests(PostgresFixture fixture) : IClassFixture<P
             options.HttpMessageHandlerFactory = _ => factory.Server.CreateHandler();
             options.AccessTokenProvider = () => Task.FromResult<string?>(Token(user));
         }).Build();
+    [Fact]
+    public async Task Anonymous_upload_is_rejected_and_revoked_session_loses_http_and_hub_access()
+    {
+        var users = await Users();
+        await using var app = Factory(runOutbox: false);
+        using var anonymous = Client(app);
+        using var form = new MultipartFormDataContent();
+        form.Add(new ByteArrayContent(new byte[12]), "file", "image.png");
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.PostAsync("/api/files/upload", form)).StatusCode);
+        using var client = Client(app, users[0]);
+        (await client.GetAsync("/api/auth/devices")).EnsureSuccessStatusCode();
+        await using var hub = Hub(app, users[0]);
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        hub.Closed += _ => { closed.TrySetResult(); return Task.CompletedTask; };
+        await hub.StartAsync();
+        await using (var db = fixture.Open())
+            await db.RefreshTokens.Where(t => t.UserId == users[0].Id).ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, (DateTime?)DateTime.UtcNow));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/auth/devices")).StatusCode);
+        await closed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+    }
     private async Task<User[]> Users(bool friends = false)
     {
         await using var db = fixture.Open();
         var users = Enumerable.Range(0, 3).Select(_ => new User { Username = Guid.NewGuid().ToString("N"), FullName = "Integration" }).ToArray();
-        db.Users.AddRange(users); await db.SaveChangesAsync();
+        db.Users.AddRange(users);
+        db.RefreshTokens.AddRange(users.Select(u => new RefreshToken { UserId = u.Id, FamilyId = u.Id, TokenHash = Guid.NewGuid().ToString(), ExpiresAt = DateTime.UtcNow.AddDays(1) }));
+        await db.SaveChangesAsync();
         foreach (var other in friends ? users.Skip(1) : Enumerable.Empty<User>())
         {
             var pair = new[] { users[0].Id, other.Id }.Order().ToArray();

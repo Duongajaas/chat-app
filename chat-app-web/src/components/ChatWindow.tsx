@@ -1,7 +1,12 @@
-﻿import { messagesApi } from "../api/messages";
+import { PrivateAttachment } from "./PrivateAttachment";
+import { CallLogBubble } from "./CallOverlay";
+import { startCall } from "../realtime/callManager";
+import { useCallStore } from "../store/callStore";
+import { messagesApi } from "../api/messages";
 import { groupsApi, type GroupMember } from "../api/groups";
-import { collectMentions, type MentionInput } from "../utils/mentions";
+import { collectMentions, prependReplyMention, type MentionInput } from "../utils/mentions";
 import { MessageText } from "./MessageText";
+import { ReplyingToBar } from "./ReplyingToBar";
 import { PinnedMessages, ForwardMessage } from "./MessageTools";
 import { getSessionVersion } from "../api/client";
 import { extractErrorMessage } from "../api/auth";
@@ -21,7 +26,7 @@ interface ChatWindowProps {
   conversation: Conversation | null;
   messages: ChatMessage[];
   onSendMessage: (content: string, features?: { replyToMessageId?: string; mentions?: MentionInput[];
-    mediaUrl?: string | null; voiceDuration?: number | null; waveformPoints?: string | null }) => void;
+    assetId?: string | null; mediaUrl?: string | null; voiceDuration?: number | null; waveformPoints?: string | null }) => void;
   onDeleteMessage: (messageId: string) => Promise<void>;
   onDeleteForMe: (messageId: string) => Promise<void>;
   onRetryMessage: (message: ChatMessage) => void;
@@ -64,6 +69,16 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   const [nearBottom, setNearBottom] = useState(true);
   const [visible, setVisible] = useState(document.visibilityState === "visible");
   const [draft, setDraft] = useState("");
+  const composerInput = useRef<HTMLInputElement>(null);
+  const activeConversation = useRef(conversation?.id);
+  activeConversation.current = conversation?.id;
+  const referenceRequest = useRef(0);
+  const [highlightedMessage, setHighlightedMessage] = useState<string | null>(null);
+  useEffect(() => {
+    if (!highlightedMessage) return;
+    const timer = setTimeout(() => setHighlightedMessage(null), 1500);
+    return () => clearTimeout(timer);
+  }, [highlightedMessage]);
   const [visibleHistory, setVisibleHistory] = useState<{ conversationId: string; count: number } | null>(null);
   const [openMessageId, setOpenMessageId] = useState<string | null>(null);
   const [activeActionId, setActiveActionId] = useState<string | null>(null);
@@ -92,6 +107,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   const isTyping = usePresenceStore((state) => conversation ? state.typingByConversation[conversation.id] : false);
   const hasRead = usePresenceStore((state) => conversation ? state.readByConversation[conversation.id] : 0);
   const { user } = useAuth();
+  const callBusy = useCallStore(s => s.preparing || s.call?.status === "Ringing" || s.call?.status === "Accepted");
   const typingStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingStopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
@@ -121,7 +137,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
 
   useEffect(() => {
     setIsActionsMenuOpen(false);
-    setShowGroup(false); setReply(null); setForward(null); setMentioned(null); setContextMessage(null);
+    setHighlightedMessage(null); setShowGroup(false); setReply(null); setForward(null); setMentioned(null); setContextMessage(null);
   }, [conversation?.id]);
 
   useEffect(() => {
@@ -163,19 +179,43 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
     return () => { current = false; };
   }, [conversation?.id, conversation?.version, conversation?.hasLeft]);
 
-  async function openReference(message: ChatMessage) {
-    if (!conversation) return;
-    const session = getSessionVersion();
-    try {
-      const [fresh] = await messagesApi.batch(conversation.id, [message.id]);
-      if (session !== getSessionVersion()) return;
-      if (!fresh || fresh.status === "Deleted") { setActionError("Tin nhắn gốc không khả dụng."); return; }
-      const element = document.getElementById("message-" + fresh.id);
-      if (element) element.scrollIntoView({ behavior: "smooth", block: "center" });
-      else setContextMessage(fresh);
-    } catch { setActionError("Không thể mở tin nhắn."); }
+  function senderName(message: ChatMessage) {
+    if (message.senderId === user?.id) return "Bạn";
+    return members.find(m => m.userId === message.senderId)?.fullName || message.senderName ||
+      (conversation?.type === "Direct" ? conversation.name : message.senderUsername || "Thành viên");
   }
 
+  function startReply(message: ChatMessage) {
+    setReply(message); setOpenMessageId(null); setActiveActionId(null);
+    if (conversation?.type === "Group") {
+      const member = members.find(m => m.userId === message.senderId);
+      setDraft(current => prependReplyMention(current, member, user?.id));
+    }
+    composerInput.current?.focus();
+  }
+
+  async function openReference(message: ChatMessage) {
+    if (!conversation) return;
+    const id = conversation.id;
+    const session = getSessionVersion();
+    const request = ++referenceRequest.current;
+    const valid = () => session === getSessionVersion() && id === activeConversation.current && request === referenceRequest.current;
+    try {
+      const [fresh] = await messagesApi.batch(id, [message.id]);
+      if (!valid()) return;
+      if (!fresh || ["Deleted", "Hidden", "Unavailable"].includes(fresh.status ?? "")) { setActionError("Tin nhắn gốc không khả dụng."); return; }
+      setActionError("");
+      const index = messages.findIndex(m => m.id === fresh.id);
+      if (index >= 0) {
+        setVisibleHistory({ conversationId: id, count: Math.max(120, messages.length - index) });
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (!valid()) return;
+          document.getElementById("message-" + fresh.id)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
+          setHighlightedMessage(fresh.id);
+        }));
+      } else setContextMessage(fresh); // Readable context from API for messages outside cached history.
+    } catch { if (valid()) setActionError("Không thể mở tin nhắn."); }
+  }
   const lastSequence = messages.reduce((max, m) => Number.isSafeInteger(m.sequence) && m.sequence < Number.MAX_SAFE_INTEGER ? Math.max(max, m.sequence) : max, 0);
   useEffect(() => {
     if (!conversation || conversation.hasLeft || conversation.closedAt || !nearBottom || !visible || !lastSequence || connectionStatus !== "connected") return;
@@ -194,7 +234,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!draft.trim() || conversation?.hasLeft || conversation?.closedAt || conversation?.isBlocked) return;
-    onSendMessage(draft, { replyToMessageId: reply?.id, mentions: conversation?.type === "Group" ? collectMentions(draft, members) : [] });
+    onSendMessage(draft, { replyToMessageId: reply?.id, mentions: conversation?.type === "Group" ? collectMentions(draft, members.filter(m => m.userId !== user?.id)) : [] });
     setReply(null);
     setDraft("");
   }
@@ -287,10 +327,10 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
           <button className={`icon-btn ${infoOpen[conversation.id] ? "is-active" : ""}`} aria-label="Thông tin hội thoại" aria-expanded={!!infoOpen[conversation.id]} onClick={() => setInfoOpen(prev => ({ ...prev, [conversation.id]: !prev[conversation.id] }))}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></svg>
           </button>
-          <button className="icon-btn" title="Gọi thoại (sắp có)" aria-label="Gọi thoại (sắp có)" disabled>
+          <button className="icon-btn" title="Gọi thoại" aria-label="Gọi thoại" disabled={conversation.type !== "Direct" || isBlocked || callBusy || connectionStatus !== "connected"} onClick={() => void startCall(conversation.id, "Audio")}>
             <PhoneIcon />
           </button>
-          <button className="icon-btn" title="Gọi video (sắp có)" aria-label="Gọi video (sắp có)" disabled>
+          <button className="icon-btn" title="Gọi video" aria-label="Gọi video" disabled={conversation.type !== "Direct" || isBlocked || callBusy || connectionStatus !== "connected"} onClick={() => void startCall(conversation.id, "Video")}>
             <VideoIcon />
           </button>
           {conversation.type === "Direct" && conversation.peerUserId && (
@@ -315,7 +355,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
         <p><MessageText content={contextMessage.content} mentions={contextMessage.mentions} /></p>
         <button onClick={() => setContextMessage(null)}>Đóng tin tham chiếu</button>
       </section>}
-      <PinnedMessages key={`pins:${conversation.id}`} conversation={conversation} onPinsChange={setPinnedIds} onOpen={m => void openReference(m)} />
+      <PinnedMessages key={`pins:${conversation.id}`} conversation={conversation} senderName={senderName} onPinsChange={setPinnedIds} onOpen={m => void openReference(m)} />
       {showGroup && conversation.type === "Group" && <GroupSettings key={`group-settings:${conversation.id}`} conversation={conversation} onClose={() => setShowGroup(false)} />}
       {(conversation.hasLeft || conversation.closedAt) && <p role="status">Chỉ đọc lịch sử trong những khoảng bạn là thành viên.</p>}
       {connectionStatus !== "connected" && <p role="status">{connectionStatus === "connecting" ? "Đang kết nối lại…" : "Mất kết nối. Ứng dụng sẽ tự thử lại."}</p>}
@@ -337,10 +377,10 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
         )}
         {visibleMessages.map((m, index) => {
           const isMine = m.senderId === user?.id;
-          const actionable = m.status !== "Deleted" && m.status !== "Sending" && m.status !== "Failed" && m.status !== "Hidden" && m.status !== "Unavailable";
+          const actionable = m.type !== "CallLog" && m.status !== "Deleted" && m.status !== "Sending" && m.status !== "Failed" && m.status !== "Hidden" && m.status !== "Unavailable";
           // console.log("Rendering message", m.id, "isMine:", isMine, "content:", m.content, "userId:", m.senderId, "currentUserId:", user?.id);
           return (
-          <div id={"message-" + m.id} key={m.id} className={`message-bubble-row ${isMine ? "is-me" : ""}`}>
+          <div id={"message-" + m.id} key={m.id} className={`message-bubble-row ${isMine ? "is-me" : ""} ${highlightedMessage === m.id ? "message-reference-highlight" : ""}`}>
             <div className={`message-bubble ${activeActionId === m.id || openMessageId === m.id ? "has-actions" : ""}`}
               tabIndex={actionable ? 0 : undefined} aria-label={actionable ? "Tin nhắn; nhấn Enter để mở thao tác" : undefined}
               onPointerDown={event => {
@@ -356,12 +396,10 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
               {m.replyPreview && m.status !== "Deleted" && <button className="reply-preview" disabled={!m.replyPreview.isAvailable} onClick={() => {
                 if (m.replyPreview?.isAvailable) void openReference({ ...m, id: m.replyPreview.id, sequence: m.replyPreview.sequence ?? 0 });
               }}>{m.replyPreview.isAvailable ? `${m.replyPreview.senderName ?? "Người dùng"}: ${m.replyPreview.contentSnippet ?? ""}` : "Tin nhắn gốc không khả dụng"}</button>}
-              {m.attachments?.map(a => <small key={a.id}>Tệp đính kèm: {a.fileName ?? "Tệp"}</small>)}
+              {m.status !== "Deleted" && m.attachments?.map(a => <PrivateAttachment key={a.id} messageId={m.id} attachment={a} />)}
               {m.status === "Deleted" ? <p className="message-bubble__deleted">Tin nhắn đã được thu hồi</p> : <>
-                {m.content && <p><MessageText content={m.content} mentions={m.mentions} /></p>}
-                {m.mediaUrl?.startsWith("https://") && (m.voiceDuration != null
-                  ? <audio controls preload="none" src={m.mediaUrl} aria-label={`Tin nhắn thoại ${m.voiceDuration} giây`} />
-                  : <a href={m.mediaUrl} target="_blank" rel="noopener noreferrer">Mở media</a>)}
+                {m.type === "CallLog" ? <CallLogBubble content={m.content} isCaller={isMine} conversationId={conversation.id} disabled={isBlocked || callBusy || connectionStatus !== "connected"} /> : m.content && <p><MessageText content={m.content} mentions={m.mentions} /></p>}
+                {(m.type === "File" || m.type === "Audio") && !m.attachments?.length && <small>Media không khả dụng.</small>}
               </>}
               <span className="message-bubble__time">
                 {new Date(m.createdAt).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}
@@ -373,7 +411,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
               {conversation.type === "Direct" && (hasRead ?? 0) >= m.sequence && isMine && index === visibleMessages.length - 1 && <span className="message-bubble__time">Đã xem</span>}
               {actionable && <div className={`message-action-bar ${isMine ? "message-action-bar--mine" : ""}`} role="group" aria-label="Thao tác tin nhắn">
                 <button type="button" className="message-action-btn" title="Bày tỏ cảm xúc (sắp có)" aria-label="Bày tỏ cảm xúc (sắp có)" disabled><SmileIcon size={16} /></button>
-                <button type="button" className="message-action-btn" aria-label="Trả lời" title="Trả lời" disabled={isBlocked} onClick={() => { setReply(m); setOpenMessageId(null); setActiveActionId(null); }}><ReplyIcon size={16} /></button>
+                <button type="button" className="message-action-btn" aria-label="Trả lời" title="Trả lời" disabled={isBlocked} onClick={() => startReply(m)}><ReplyIcon size={16} /></button>
                 <button type="button" className="message-action-btn" aria-label="Chuyển tiếp" title="Chuyển tiếp" onClick={() => { setForward(m); setOpenMessageId(null); setActiveActionId(null); }}><ForwardIcon size={16} /></button>
                 <button type="button" className={`message-action-btn ${pinnedIds.includes(m.id) ? "is-active" : ""}`} aria-pressed={pinnedIds.includes(m.id)} aria-label={pinnedIds.includes(m.id) ? "Bỏ ghim tin nhắn" : "Ghim tin nhắn"} title={pinnedIds.includes(m.id) ? "Bỏ ghim" : "Ghim"}
                   disabled={pinBusy !== null || isBlocked || !(conversation.type === "Direct" || conversation.permissions?.includes("PinMessage"))} onClick={() => void togglePin(m)}><PinIcon size={16} /></button>
@@ -406,11 +444,9 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
         </button>
       )}
 
-      {reply && !isBlocked && <div className="reply-preview">
-        Trả lời: {reply.content.slice(0, 80)} <button onClick={() => setReply(null)}>Hủy trả lời</button>
-      </div>}
+      {reply && !isBlocked && <ReplyingToBar message={reply} senderName={senderName(reply)} onCancel={() => { setReply(null); composerInput.current?.focus(); }} />}
       {conversation.type === "Group" && !isBlocked && /(?:^|\s)@([\w.-]*)$/.test(draft) && <div className="mention-suggestions">
-        {members.filter(m => m.username?.toLowerCase().startsWith(draft.slice(draft.lastIndexOf("@") + 1).toLowerCase()))
+        {members.filter(m => m.userId !== user?.id && m.username?.toLowerCase().startsWith(draft.slice(draft.lastIndexOf("@") + 1).toLowerCase()))
           .slice(0, 6).map(m => <button key={m.userId} onClick={() => setDraft(draft.slice(0, draft.lastIndexOf("@")) + "@" + m.username + " ")}>@{m.username}</button>)}
       </div>}
       {isBlocked ? (
@@ -427,7 +463,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
           </button>
           <button type="button" className="icon-btn" title="Thêm tiện ích (sắp có)" aria-label="Thêm tiện ích (sắp có)" disabled><PlusCircleIcon /></button>
           </div>
-          <input maxLength={4000} placeholder={`Nhắn tin tới ${conversation.name}`} value={draft} onChange={(e) => handleDraftChange(e.target.value)} />
+          <input ref={composerInput} maxLength={4000} placeholder={`Nhắn tin tới ${conversation.name}`} value={draft} onChange={(e) => handleDraftChange(e.target.value)} />
           <button type="submit" aria-label="Gửi tin nhắn" className="icon-btn icon-btn--send" disabled={!draft.trim()}>
             <SendIcon />
           </button>
@@ -465,6 +501,3 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
     </>
   );
 }
-
-
-
