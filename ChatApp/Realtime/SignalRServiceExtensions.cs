@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.SignalR;
+﻿using Microsoft.AspNetCore.SignalR;
 using StackExchange.Redis;
 
 namespace ChatApp.Realtime;
@@ -9,9 +9,12 @@ public static class SignalRServiceExtensions
     {
         var signalR = services.AddSignalR(options =>
         {
-            options.MaximumReceiveMessageSize = 16 * 1024;
+            options.MaximumReceiveMessageSize = 256 * 1024;
+            options.AddFilter<SessionHubFilter>();
             options.AddFilter<HubRateLimitFilter>();
         });
+
+        services.AddSignalR().AddJsonProtocol(o => o.PayloadSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 
         // Local development and existing tests can still run without Redis.
         if (!configuration.GetValue<bool>("Redis:Enabled")) return services;
@@ -35,3 +38,4 @@ public static class SignalRServiceExtensions
         return services;
     }
 }
+

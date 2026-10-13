@@ -2,6 +2,16 @@ namespace ChatApp.Models;
 
 public class CallSession
 {
+    public Guid? ClientCallId { get; set; }
+    public string? RequestHash { get; set; }
+    public long Version { get; set; }
+    public DateTime? ExpiresAt { get; set; }
+    public DateTime? ConnectDeadlineAt { get; set; }
+    public DateTime? ConnectedAt { get; set; }
+    public string? EndedReason { get; set; }
+    public int NegotiationEpoch { get; set; }
+    public int RestartCount { get; set; }
+    public DateTime? RecoveryDeadlineAt { get; set; }
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid? ConversationId { get; set; }
     public Guid? CallerId { get; set; }

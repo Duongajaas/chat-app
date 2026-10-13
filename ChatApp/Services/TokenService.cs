@@ -18,7 +18,7 @@ public class TokenService : ITokenService
         _jwtOptions = jwtOptions.Value;
     }
 
-    public GeneratedAccessToken GenerateAccessToken(User user)
+    public GeneratedAccessToken GenerateAccessToken(User user, Guid? sessionId = null)
     {
         var claims = new List<Claim>
         {
@@ -28,6 +28,7 @@ public class TokenService : ITokenService
             new("email_verified", user.IsVerified.ToString().ToLowerInvariant())
         };
 
+        if (sessionId.HasValue) claims.Add(new Claim("sid", sessionId.Value.ToString()));
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_jwtOptions.SecretKey));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
         var expiresAt = DateTime.UtcNow.AddMinutes(_jwtOptions.AccessTokenMinutes);

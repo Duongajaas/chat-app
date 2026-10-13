@@ -22,6 +22,8 @@ public sealed class RedisRateLimitMiddleware(RequestDelegate next, ILogger<Redis
         var configured = options.Value;
         var rule = policy switch
         {
+            "media-upload" => new RateLimitRule { PermitLimit = 10, WindowSeconds = 60 },
+            "media-read" => new RateLimitRule { PermitLimit = 60, WindowSeconds = 60 },
             "group-write" => new RateLimitRule { PermitLimit = 30, WindowSeconds = 60 },
             "group-join" => new RateLimitRule { PermitLimit = 10, WindowSeconds = 60 },
             "chat-write" => new RateLimitRule { PermitLimit = 60, WindowSeconds = 60 },
@@ -37,7 +39,7 @@ public sealed class RedisRateLimitMiddleware(RequestDelegate next, ILogger<Redis
         };
         var ip = context.Connection.RemoteIpAddress;
         var partition = "ip:" + (ip?.IsIPv4MappedToIPv6 == true ? ip.MapToIPv4().ToString() : ip?.ToString() ?? "unknown");
-        if ((policy is "chat-write" or "group-write" or "group-join") && context.User.FindFirstValue(ClaimTypes.NameIdentifier) is string user)
+        if ((policy is "chat-write" or "group-write" or "group-join" or "media-upload" or "media-read") && context.User.FindFirstValue(ClaimTypes.NameIdentifier) is string user)
             partition = "user:" + user;
 
         RateLimitDecision decision;
@@ -47,6 +49,9 @@ public sealed class RedisRateLimitMiddleware(RequestDelegate next, ILogger<Redis
                 TimeSpan.FromSeconds(rule.WindowSeconds), context.RequestAborted);
             if (decision.Allowed && policy == "group-join")
                 decision = await counter.AcquireAsync("group-join-ip", "ip:" + (ip?.MapToIPv6().ToString() ?? "unknown"),
+                    30, TimeSpan.FromMinutes(1), context.RequestAborted);
+            if (decision.Allowed && policy == "media-upload")
+                decision = await counter.AcquireAsync("media-upload-ip", "ip:" + (ip?.MapToIPv6().ToString() ?? "unknown"),
                     30, TimeSpan.FromMinutes(1), context.RequestAborted);
         }
         catch (Exception ex) when (ex is RedisException or RedisTimeoutException)

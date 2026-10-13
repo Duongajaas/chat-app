@@ -1,4 +1,4 @@
-using ChatApp.Common;
+﻿using ChatApp.Common;
 using ChatApp.Data;
 using ChatApp.DTOs;
 using ChatApp.Models;
@@ -10,10 +10,11 @@ namespace ChatApp.Services;
 public class BlockService : IBlockService
 {
     private readonly AppDbContext _db;
+    private readonly ChatApp.Calls.CallService? _calls;
 
-    public BlockService(AppDbContext db)
+    public BlockService(AppDbContext db, ChatApp.Calls.CallService? calls = null)
     {
-        _db = db;
+        _db = db; _calls = calls;
     }
 
     public async Task BlockUserAsync(Guid blockerId, Guid targetUserId)
@@ -59,6 +60,8 @@ public class BlockService : IBlockService
             BlockedId = targetUserId,
             CreatedAt = now
         });
+
+        if (directId.HasValue && _calls != null) await _calls.EndRingingForBlock(directId.Value);
 
         await _db.Friendships
             .Where(friendship => friendship.UserLowId == lowId && friendship.UserHighId == highId)
@@ -159,3 +162,4 @@ public class BlockService : IBlockService
         //     .ToListAsync();
     }
 }
+

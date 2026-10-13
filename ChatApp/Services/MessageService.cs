@@ -1,9 +1,10 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using ChatApp.Common;
 using ChatApp.Data;
 using ChatApp.DTOs;
 using ChatApp.Models;
 using ChatApp.Realtime;
+using ChatApp.Media;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
@@ -46,18 +47,16 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
         if (clientMessageId == Guid.Empty) throw AppException.BadRequest("clientMessageId là bắt buộc.");
         if (request.Mentions?.Length > 20) throw AppException.BadRequest("Tối đa 20 vị trí mention.");
         var requestHash = MessageReconciliation.Hash(conversationId, request, sourceId);
+        var assetId = sourceId == null ? MediaValidation.AssetId(request.AssetId, request.MediaUrl) : null;
         if (sourceId == null)
         {
             if (request.Content?.Length > 4000) throw AppException.BadRequest("Tin nhắn tối đa 4000 ký tự.");
-            if (request.MediaUrl == null)
+            if (assetId == null)
             {
                 if (string.IsNullOrWhiteSpace(request.Content)) throw AppException.BadRequest("Tin nhắn cần nội dung hoặc media.");
                 if (request.VoiceDuration != null || request.WaveformPoints != null)
                     throw AppException.BadRequest("Thông tin voice cần mediaUrl.");
             }
-            else if (request.MediaUrl.Length > 2048 || !Uri.TryCreate(request.MediaUrl, UriKind.Absolute, out var mediaUri) ||
-                mediaUri.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(mediaUri.UserInfo))
-                throw AppException.BadRequest("mediaUrl phải là URL HTTPS hợp lệ.");
             if (request.VoiceDuration is <= 0 or > 3600 || request.WaveformPoints?.Length > 2000)
                 throw AppException.BadRequest("Thông tin voice không hợp lệ.");
             if (request.WaveformPoints != null && request.VoiceDuration == null)
@@ -91,25 +90,40 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
             var sourceDirect = await db.DirectConversations.SingleOrDefaultAsync(d => d.ConversationId == sourceConversation, ct);
             if (sourceDirect != null && await blocks.IsBlockedEitherWayAsync(sourceDirect.UserLowId, sourceDirect.UserHighId))
                 throw AppException.Forbidden("Không thể chuyển tiếp từ hội thoại bị chặn.");
+            if (source.Type == MessageType.CallLog) throw AppException.BadRequest("Không thể chuyển tiếp nhật ký cuộc gọi.");
             content = source.Content ?? "";
         }
-        else if (string.IsNullOrWhiteSpace(content) && request.MediaUrl == null)
+        else if (string.IsNullOrWhiteSpace(content) && assetId == null)
             throw AppException.BadRequest("Tin nhắn cần nội dung hoặc media.");
+        PrivateMediaAsset? asset = null;
+        if (assetId.HasValue)
+        {
+            asset = await db.PrivateMediaAssets.SingleOrDefaultAsync(a => a.Id == assetId && a.OwnerId == userId && a.Uploaded, ct)
+                ?? throw AppException.BadRequest("Media không thuộc tài khoản hoặc chưa upload xong.");
+            if (request.VoiceDuration != null && !asset.ContentType.StartsWith("audio/", StringComparison.Ordinal))
+                throw AppException.BadRequest("Tin nhắn thoại cần file âm thanh.");
+        }
         if (request.ReplyToMessageId is Guid replyId &&
             !await new MessageReader(db).Visible(userId, conversationId).AnyAsync(m => m.Id == replyId && m.DeletedAt == null, ct))
             throw AppException.BadRequest("Tin nhắn được trả lời không khả dụng trong hội thoại.");
         var message = new Message { ConversationId = conversationId, SenderId = userId, ClientMessageId = clientMessageId,
             Content = content, ReplyToMessageId = request.ReplyToMessageId, ForwardedFromMessageId = source?.Id,
             IsForwarded = source != null, RequestHash = requestHash,
-            Type = source?.Type ?? (request.VoiceDuration != null ? MessageType.Audio : request.MediaUrl != null ? MessageType.File : MessageType.Text),
-            MediaUrl = source?.MediaUrl ?? request.MediaUrl,
+            Type = source?.Type ?? (request.VoiceDuration != null ? MessageType.Audio : asset != null ? MessageType.File : MessageType.Text),
+            MediaUrl = null,
             VoiceDuration = source?.VoiceDuration ?? request.VoiceDuration,
             WaveformPoints = source?.WaveformPoints ?? request.WaveformPoints };
         db.Messages.Add(message);
+        if (asset != null) db.MessageAttachments.Add(new MessageAttachment { MessageId = message.Id,
+            StorageKey = asset.StorageKey, FileName = asset.FileName, FileType = asset.ContentType,
+            FileSize = asset.Length, DurationSeconds = request.VoiceDuration });
         if (source == null) await AddMentionsAsync(message, request.Mentions ?? [], ct);
         if (source != null)
         {
-            var attachments = await db.MessageAttachments.AsNoTracking().Where(a => a.MessageId == source.Id).ToListAsync(ct);
+            var attachments = await db.MessageAttachments.AsNoTracking().Where(a => a.MessageId == source.Id &&
+                db.PrivateMediaAssets.Any(asset => asset.StorageKey == a.StorageKey && asset.Uploaded)).ToListAsync(ct);
+            if (source.Type is MessageType.File or MessageType.Audio && attachments.Count == 0)
+                throw AppException.BadRequest("Media cũ chưa được chuyển sang kho riêng tư, không thể chuyển tiếp.");
             db.MessageAttachments.AddRange(attachments.Select(a => new MessageAttachment { MessageId = message.Id,
                 StorageKey = a.StorageKey, FileName = a.FileName, FileType = a.FileType, FileSize = a.FileSize,
                 Width = a.Width, Height = a.Height, DurationSeconds = a.DurationSeconds, ThumbnailKey = a.ThumbnailKey, Metadata = a.Metadata }));
@@ -131,7 +145,7 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
             .SetProperty(c => c.LastMessageAt, (DateTime?)message.CreatedAt)
             .SetProperty(c => c.UpdatedAt, message.CreatedAt), ct);
         // Plain messages retain the compatible event; richer messages contain no shared quote/attachment payload.
-        if (message.ReplyToMessageId != null || message.IsForwarded || message.MediaUrl != null || (request.Mentions?.Length ?? 0) > 0)
+        if (message.ReplyToMessageId != null || message.IsForwarded || asset != null || (request.Mentions?.Length ?? 0) > 0)
             ConversationEvents.Add(db, conversationId, "MessageAvailable", new { ConversationId = conversationId, MessageId = message.Id, message.Sequence });
         else ConversationEvents.Add(db, conversationId, "ReceiveMessage", ToResponse(message));
         var mentions = await db.MessageMentions.Where(m => m.MessageId == message.Id).ToListAsync(ct);
@@ -278,7 +292,8 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
     public static MessageResponse ToResponse(Message m) => new(m.Id, m.ConversationId, m.SenderId ?? Guid.Empty,
         m.Sequence, m.DeletedAt == null ? m.Content : "Tin nhắn đã được thu hồi", m.ClientMessageId,
         m.CreatedAt, m.EditedAt, m.DeletedAt == null ? "Sent" : "Deleted",
-        MediaUrl: m.DeletedAt == null ? m.MediaUrl : null,
+        MediaUrl: null,
         VoiceDuration: m.DeletedAt == null ? m.VoiceDuration : null,
-        WaveformPoints: m.DeletedAt == null ? m.WaveformPoints : null);
+        WaveformPoints: m.DeletedAt == null ? m.WaveformPoints : null, Type: m.Type.ToString());
 }
+

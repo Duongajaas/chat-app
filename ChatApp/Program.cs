@@ -1,4 +1,4 @@
-﻿using ChatApp.Media;
+using ChatApp.Media;
 using ChatApp.Realtime;
 using ChatApp.RateLimiting;
 using Microsoft.AspNetCore.SignalR;
@@ -35,11 +35,17 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<HubRateLimitFilter>();
+builder.Services.AddSingleton<SessionHubFilter>();
+builder.Services.AddSingleton<SessionConnectionMonitor>();
+builder.Services.AddHostedService(p => p.GetRequiredService<SessionConnectionMonitor>());
+builder.Services.AddSingleton<IUserIdProvider, SessionUserIdProvider>();
 builder.Services.Configure<GoogleAuthOptions>(builder.Configuration.GetSection(GoogleAuthOptions.SectionName));
 builder.Services.Configure<AccountLockoutOptions>(builder.Configuration.GetSection(AccountLockoutOptions.SectionName));
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection(SmtpOptions.SectionName));
 builder.Services.Configure<AppUrlsOptions>(builder.Configuration.GetSection(AppUrlsOptions.SectionName));
-builder.Services.AddScoped<IFileUploadService, FileUploadService>();
+builder.Services.AddHttpClient<IPrivateMediaStorage, PrivateMediaStorage>(client => client.Timeout = TimeSpan.FromSeconds(30))
+    .RemoveAllLoggers() // Signed storage URLs must not enter HttpClient request logs.
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 var rateLimitOptions = builder.Configuration
     .GetSection(RateLimitingOptions.SectionName)
     .Get<RateLimitingOptions>() ?? new RateLimitingOptions();
@@ -68,6 +74,13 @@ builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IFriendLinkService, FriendLinkService>();
 builder.Services.AddScoped<IFriendService, FriendService>();
 builder.Services.AddScoped<IBlockService, BlockService>();
+builder.Services.AddScoped<ChatApp.Calls.CallService>();
+builder.Services.AddOptions<ChatApp.Calls.CallOptions>().BindConfiguration("Calls")
+    .PostConfigure(o => { o.TurnUrls = o.TurnUrls.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray(); })
+    .Validate(o => o.RingSeconds > 0 && o.LeaseSeconds >= 45 && o.ConnectSeconds > 0 && o.RecoverySeconds > 0 && o.CredentialSeconds >= 120,
+        "Invalid call timeouts")
+    .Validate(o => o.TurnUrls.Length == 0 || o.TurnSecret.Length >= 32, "TURN shared secret must contain at least 32 characters")
+    .ValidateOnStart();
 
 builder.Services.AddChatSignalR(builder.Configuration);
 var runtimeRole = builder.Services.AddChatRuntime(builder.Configuration);
@@ -76,9 +89,12 @@ builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(Progr
 // ---------- CORS ----------
 // Cho phép frontend (Vite dev server) gọi API kèm cookie/credentials nếu cần.
 // Production: đổi origin sang domain thật của frontend đã deploy.
-var frontendOrigins = builder.Configuration
-    .GetSection("Cors:AllowedOrigins")
-    .Get<string[]>() ?? new[] { "http://localhost:5173", "http://localhost:5000" };
+var configuredOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
+var frontendOrigins = configuredOrigins is { Length: > 0 }
+    ? configuredOrigins
+    : builder.Environment.IsDevelopment()
+        ? new[] { "http://localhost:5173", "http://localhost:5000" }
+        : [];
 
 if (builder.Environment.IsProduction())
 {
@@ -163,10 +179,9 @@ builder.Services.AddAuthentication(options =>
     {
         OnTokenValidated = async context =>
         {
-            var id = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
             var db = context.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
-            if (!Guid.TryParse(id, out var userId) || !await db.Users.AnyAsync(u => u.Id == userId && u.IsActive && u.DeletedAt == null, context.HttpContext.RequestAborted))
-                context.Fail("Account unavailable");
+            if (!await SessionAccess.IsActiveAsync(db, context.Principal, context.HttpContext.RequestAborted))
+                context.Fail("Session unavailable");
         },
         OnMessageReceived = context =>
         {
@@ -207,6 +222,12 @@ builder.Services.AddRateLimiter(options =>
 
     string PartitionKey(HttpContext httpContext) =>
         httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    options.AddPolicy("media-upload", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? PartitionKey(context), _ =>
+        new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    options.AddPolicy("media-read", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? PartitionKey(context), _ =>
+        new FixedWindowRateLimiterOptions { PermitLimit = 60, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 
     options.AddPolicy("group-write", context => RateLimitPartition.GetFixedWindowLimiter(
         context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? PartitionKey(context), _ =>
@@ -296,7 +317,6 @@ if (runtimeRole == "worker")
 app.UseForwardedHeaders();
 
 // ---------- Global exception handling ----------
-/* 
 app.Use(async (context, next) =>
 {
     try
@@ -320,7 +340,6 @@ app.Use(async (context, next) =>
         await context.Response.WriteAsJsonAsync(new { message = "Đã có lỗi xảy ra, vui lòng thử lại sau.", traceId = context.TraceIdentifier });
     }
 });
-*/
 
 if (app.Environment.IsDevelopment())
 {
@@ -378,4 +397,6 @@ app.MapHub<ChatHub>("/hubs/chat", options => options.CloseOnAuthenticationExpira
 app.Run();
 
 public partial class Program { }
+
+
 
