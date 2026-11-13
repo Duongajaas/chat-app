@@ -138,7 +138,7 @@ export default function ChatPage() {
   const activeMessages = activeConversationId ? messagesByConversation[activeConversationId] ?? [] : [];
 
   async function handleSend(content: string, retry?: ChatMessage, features?: { replyToMessageId?: string; mentions?: import("../utils/mentions").MentionInput[];
-    assetId?: string | null; mediaUrl?: string | null; voiceDuration?: number | null; waveformPoints?: string | null }) {
+    assetId?: string | null; mediaUrl?: string | null; voiceDuration?: number | null; waveformPoints?: string | null; attachmentName?: string }) {
     const id = retry?.conversationId ?? activeConversationId;
     if (!id || !user) return;
     const version = getSessionVersion();
@@ -152,6 +152,7 @@ export default function ChatPage() {
     appendMessage(id, {
       id: clientMessageId, conversationId: id, senderId: user.id, sequence: Number.MAX_VALUE,
       content, replyToMessageId, pendingMentions: mentions, assetId, mediaUrl, voiceDuration, waveformPoints,
+      pendingAttachmentName: retry?.pendingAttachmentName ?? features?.attachmentName,
       pendingSourceMessageId: retry?.pendingSourceMessageId, createdAt: retry?.createdAt ?? new Date().toISOString(), clientMessageId, status: "Sending",
     });
     try {

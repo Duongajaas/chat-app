@@ -4,6 +4,7 @@ import { startCall } from "../realtime/callManager";
 import { useCallStore } from "../store/callStore";
 import { messagesApi } from "../api/messages";
 import { uploadMedia } from "../api/files";
+import { DOCUMENT_EXTENSIONS, IMAGE_TYPES, isAllowedDocument, isImageType } from "../utils/attachments";
 import { groupsApi, type GroupMember } from "../api/groups";
 import { collectMentions, prependReplyMention, type MentionInput } from "../utils/mentions";
 import { MessageText } from "./MessageText";
@@ -27,7 +28,8 @@ interface ChatWindowProps {
   conversation: Conversation | null;
   messages: ChatMessage[];
   onSendMessage: (content: string, features?: { replyToMessageId?: string; mentions?: MentionInput[];
-    assetId?: string | null; mediaUrl?: string | null; voiceDuration?: number | null; waveformPoints?: string | null }) => void;
+    assetId?: string | null; mediaUrl?: string | null; voiceDuration?: number | null; waveformPoints?: string | null;
+    attachmentName?: string }) => void;
   onDeleteMessage: (messageId: string) => Promise<void>;
   onDeleteForMe: (messageId: string) => Promise<void>;
   onRetryMessage: (message: ChatMessage) => void;
@@ -72,7 +74,8 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   const [draft, setDraft] = useState("");
   const composerInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
-  const [uploadingImage, setUploadingImage] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState<"image" | "file" | null>(null);
   const activeConversation = useRef(conversation?.id);
   activeConversation.current = conversation?.id;
   const referenceRequest = useRef(0);
@@ -234,25 +237,30 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
     );
   }
 
-  async function handleImagePicked(file: File | undefined) {
+  async function handleAttachmentPicked(file: File | undefined, kind: "image" | "file") {
     if (imageInput.current) imageInput.current.value = "";
-    if (!file || uploadingImage || isBlocked) return;
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setActionError("Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP."); return; }
+    if (fileInput.current) fileInput.current.value = "";
+    if (!file || uploading || isBlocked) return;
+    if (kind === "image" && !isImageType(file.type)) { setActionError("Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP."); return; }
+    if (kind === "file" && !isImageType(file.type) && !isAllowedDocument(file.name)) {
+      setActionError("Chỉ hỗ trợ PDF, Word, Excel, PowerPoint, ZIP và văn bản (TXT, CSV, MD)."); return;
+    }
     const targetConversationId = conversationId;
     const session = getSessionVersion();
-    setActionError(""); setUploadingImage(true);
+    setActionError(""); setUploading(kind);
     try {
       const uploaded = await uploadMedia(file);
       // Do not post into a different chat or account if the user switched while uploading.
       if (session !== getSessionVersion() || useChatStore.getState().activeConversationId !== targetConversationId) return;
-      onSendMessage("", { assetId: uploaded.assetId, replyToMessageId: reply?.id });
+      onSendMessage("", { assetId: uploaded.assetId, replyToMessageId: reply?.id, attachmentName: uploaded.fileName || file.name });
       setReply(null);
     } catch (error) {
       // uploadMedia rejects oversize files with a plain Error before any request is made.
       if (session === getSessionVersion()) setActionError(extractErrorMessage(error,
-        error instanceof Error && !("isAxiosError" in error) ? error.message : "Không tải được ảnh. Vui lòng thử lại."));
+        error instanceof Error && !("isAxiosError" in error) ? error.message
+          : kind === "image" ? "Không tải được ảnh. Vui lòng thử lại." : "Không tải được file. Vui lòng thử lại."));
     } finally {
-      setUploadingImage(false);
+      setUploading(null);
     }
   }
 
@@ -422,7 +430,8 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
                 if (m.replyPreview?.isAvailable) void openReference({ ...m, id: m.replyPreview.id, sequence: m.replyPreview.sequence ?? 0 });
               }}>{m.replyPreview.isAvailable ? `${m.replyPreview.senderName ?? "Người dùng"}: ${m.replyPreview.contentSnippet ?? ""}` : "Tin nhắn gốc không khả dụng"}</button>}
               {m.status !== "Deleted" && m.attachments?.map(a => <PrivateAttachment key={a.id} messageId={m.id} attachment={a} />)}
-              {(m.status === "Sending" || m.status === "Failed") && m.assetId && !m.attachments?.length && <small className="message-bubble__pending-media">Ảnh</small>}
+              {(m.status === "Sending" || m.status === "Failed") && m.assetId && !m.attachments?.length &&
+                <small className="message-bubble__pending-media">{m.pendingAttachmentName ? `📎 ${m.pendingAttachmentName}` : "Ảnh"}</small>}
               {m.status === "Deleted" ? <p className="message-bubble__deleted">Tin nhắn đã được thu hồi</p> : <>
                 {m.type === "CallLog" ? <CallLogBubble content={m.content} isCaller={isMine} conversationId={conversation.id} disabled={isBlocked || callBusy || connectionStatus !== "connected"} /> : m.content && <p><MessageText content={m.content} mentions={m.mentions} /></p>}
                 {(m.type === "File" || m.type === "Audio") && !m.attachments?.length && <small>Media không khả dụng.</small>}
@@ -481,13 +490,17 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
         <form className="chat-window__composer" onSubmit={handleSubmit}>
           <div className="chat-window__composer-tools">
           <button type="button" className="icon-btn" title="Emoji (sắp có)" aria-label="Emoji (sắp có)" disabled><SmileIcon /></button>
-          <input ref={imageInput} type="file" accept="image/jpeg,image/png,image/webp" hidden aria-hidden="true" tabIndex={-1}
-            onChange={e => { void handleImagePicked(e.target.files?.[0]); }} />
-          <button type="button" className="icon-btn" title={uploadingImage ? "Đang tải ảnh…" : "Gửi ảnh"} aria-label={uploadingImage ? "Đang tải ảnh" : "Gửi ảnh"}
-            aria-busy={uploadingImage} disabled={uploadingImage} onClick={() => imageInput.current?.click()}>
+          <input ref={imageInput} type="file" accept={IMAGE_TYPES.join(",")} hidden aria-hidden="true" tabIndex={-1}
+            onChange={e => { void handleAttachmentPicked(e.target.files?.[0], "image"); }} />
+          <input ref={fileInput} type="file" accept={[...DOCUMENT_EXTENSIONS, ...IMAGE_TYPES].join(",")} hidden aria-hidden="true" tabIndex={-1}
+            onChange={e => { void handleAttachmentPicked(e.target.files?.[0], "file"); }} />
+          <button type="button" className="icon-btn" title={uploading === "image" ? "Đang tải ảnh…" : "Gửi ảnh"} aria-label={uploading === "image" ? "Đang tải ảnh" : "Gửi ảnh"}
+            aria-busy={uploading === "image"} disabled={uploading !== null} onClick={() => imageInput.current?.click()}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8" cy="8" r="2" /><path d="m3 18 6-6 4 4 3-3 5 5" /></svg>
           </button>
-          <button type="button" className="icon-btn" title="Đính kèm (sắp có)" disabled>
+          <button type="button" className="icon-btn" title={uploading === "file" ? "Đang tải file…" : "Gửi file (PDF, Word, Excel, PowerPoint, ZIP, TXT – tối đa 8 MB)"}
+            aria-label={uploading === "file" ? "Đang tải file" : "Gửi file"}
+            aria-busy={uploading === "file"} disabled={uploading !== null} onClick={() => fileInput.current?.click()}>
             <PaperclipIcon />
           </button>
           <button type="button" className="icon-btn" title="Thêm tiện ích (sắp có)" aria-label="Thêm tiện ích (sắp có)" disabled><PlusCircleIcon /></button>

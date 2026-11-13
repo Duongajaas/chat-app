@@ -100,6 +100,8 @@ export interface ChatMessage {
   mentions?: import("./utils/mentions").Mention[];
   pendingMentions?: import("./utils/mentions").MentionInput[];
   assetId?: string | null; mediaUrl?: string | null;
+  /** Local-only file name shown while an uploaded attachment is still being sent. */
+  pendingAttachmentName?: string;
   voiceDuration?: number | null;
   waveformPoints?: string | null;
   attachments?: { id: string; fileName: string | null; fileType: string | null; fileSize: number | null }[];

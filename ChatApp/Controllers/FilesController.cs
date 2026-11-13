@@ -26,10 +26,11 @@ public class FilesController(AppDbContext db, IPrivateMediaStorage storage) : Co
         await file.CopyToAsync(output, ct);
         var bytes = output.ToArray();
         if (bytes.LongLength != file.Length || bytes.Length > MediaValidation.MaxBytes) throw AppException.BadRequest("Dung lượng file không hợp lệ.");
-        var type = MediaValidation.Detect(bytes);
         var name = Path.GetFileName(file.FileName.Replace('\\', '/'));
         if (name.Length > 200) name = name[^200..];
         name = new string(name.Where(c => !char.IsControl(c)).ToArray());
+        // The sanitized name only disambiguates container formats (docx vs zip); content is still verified.
+        var type = MediaValidation.Detect(bytes, name);
         var asset = new PrivateMediaAsset { OwnerId = UserId, FileName = name, ContentType = type, Length = bytes.Length };
         asset.StorageKey = "chatapp_private/" + asset.Id.ToString("N");
         // Reserve quota before contacting storage, shared across API instances.
