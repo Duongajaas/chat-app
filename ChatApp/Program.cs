@@ -67,6 +67,16 @@ builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<GroupService>();
 builder.Services.Configure<CloudinaryOptions>(builder.Configuration.GetSection("Cloudinary"));
+// Local .env files often use the Compose-style CLOUDINARY_* names; only fill values the Cloudinary section left empty.
+builder.Services.PostConfigure<CloudinaryOptions>(o =>
+{
+    string Fallback(string current, string key) =>
+        string.IsNullOrWhiteSpace(current) ? builder.Configuration[key]?.Trim() ?? "" : current.Trim();
+    o.CloudName = Fallback(o.CloudName, "CLOUDINARY_CLOUD_NAME");
+    o.ApiKey = Fallback(o.ApiKey, "CLOUDINARY_API_KEY");
+    o.ApiSecret = Fallback(o.ApiSecret, "CLOUDINARY_API_SECRET");
+    o.AvatarUploadPreset = Fallback(o.AvatarUploadPreset, "CLOUDINARY_AVATAR_UPLOAD_PRESET");
+});
 builder.Services.AddHttpClient<IAvatarStorage, CloudinaryAvatarStorage>(client => client.Timeout = TimeSpan.FromSeconds(15));
 builder.Services.AddScoped<AvatarService>();
 builder.Services.AddScoped<IMessageService, MessageService>();

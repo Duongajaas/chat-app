@@ -1058,6 +1058,10 @@ input:focus-visible, select:focus-visible {  }
 .private-attachment { display: grid; gap: 0.4rem; margin-block: 0.4rem; max-width: 100%; }
 .private-attachment .btn { min-height: 2rem; padding: 0.35rem 0.65rem; font-size: 0.8125rem; }
 .private-attachment audio { max-width: 100%; }
+.private-attachment__image-link { display: block; line-height: 0; }
+.private-attachment__image { display: block; max-width: min(100%, 280px); max-height: 320px; width: auto; height: auto; object-fit: contain; border-radius: var(--radius-sm); }
+.private-attachment__image-placeholder { display: grid; place-items: center; width: 200px; max-width: 100%; height: 140px; border-radius: var(--radius-sm); background: var(--color-accent-soft); color: var(--color-text); font-size: 0.8125rem; }
+.message-bubble__pending-media { display: block; opacity: 0.75; }
 
 /* Pin list and reply composer: shared theme tokens, compact controls. */
 .pins-bar { position: relative; display: flex; align-items: center; flex: 0 0 auto; gap: 4px; padding: 7px 16px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); z-index: 12; }

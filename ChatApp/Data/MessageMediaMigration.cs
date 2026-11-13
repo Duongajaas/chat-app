@@ -10,9 +10,12 @@ public sealed class AddMessageMedia : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder)
     {
-        migrationBuilder.AddColumn<string>(name: "media_url", table: "messages", type: "text", nullable: true);
-        migrationBuilder.AddColumn<int>(name: "voice_duration", table: "messages", type: "integer", nullable: true);
-        migrationBuilder.AddColumn<string>(name: "waveform_points", table: "messages", type: "text", nullable: true);
+        // Idempotent: some databases already received these columns from AddVoiceStickerMetadata.
+        migrationBuilder.Sql("""
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_url text;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS voice_duration integer;
+            ALTER TABLE messages ADD COLUMN IF NOT EXISTS waveform_points text;
+            """);
     }
 
     protected override void Down(MigrationBuilder migrationBuilder)
