@@ -134,7 +134,7 @@ test("member can pin, send reply mentions and apply an internal avatar asset", a
   await expect(page.locator("#message-sent .message-mention")).toHaveText("@an");
   await page.getByRole("button", { name: "Thông tin hội thoại", exact: true }).click();
   await page.getByRole("button", { name: "Thông tin nhóm", exact: true }).click();
-  await page.locator('input[type="file"]').setInputFiles({ name: "avatar.png", mimeType: "image/png",
+  await page.getByLabel(/Đổi avatar nhóm/).setInputFiles({ name: "avatar.png", mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aJ1kAAAAASUVORK5CYII=", "base64") });
   await expect.poll(() => captured.avatarBodies.length).toBe(1);
   expect(captured.avatarBodies[0]).toEqual({ assetId: "internal-asset", expectedVersion: 1 });

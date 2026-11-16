@@ -3,6 +3,7 @@ import { CallLogBubble } from "./CallOverlay";
 import { startCall } from "../realtime/callManager";
 import { useCallStore } from "../store/callStore";
 import { messagesApi } from "../api/messages";
+import { uploadMedia } from "../api/files";
 import { groupsApi, type GroupMember } from "../api/groups";
 import { collectMentions, prependReplyMention, type MentionInput } from "../utils/mentions";
 import { MessageText } from "./MessageText";
@@ -70,6 +71,8 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   const [visible, setVisible] = useState(document.visibilityState === "visible");
   const [draft, setDraft] = useState("");
   const composerInput = useRef<HTMLInputElement>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
   const activeConversation = useRef(conversation?.id);
   activeConversation.current = conversation?.id;
   const referenceRequest = useRef(0);
@@ -229,6 +232,28 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
         <p>Chọn một cuộc trò chuyện để bắt đầu nhắn tin</p>
       </section>
     );
+  }
+
+  async function handleImagePicked(file: File | undefined) {
+    if (imageInput.current) imageInput.current.value = "";
+    if (!file || uploadingImage || isBlocked) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setActionError("Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP."); return; }
+    const targetConversationId = conversationId;
+    const session = getSessionVersion();
+    setActionError(""); setUploadingImage(true);
+    try {
+      const uploaded = await uploadMedia(file);
+      // Do not post into a different chat or account if the user switched while uploading.
+      if (session !== getSessionVersion() || useChatStore.getState().activeConversationId !== targetConversationId) return;
+      onSendMessage("", { assetId: uploaded.assetId, replyToMessageId: reply?.id });
+      setReply(null);
+    } catch (error) {
+      // uploadMedia rejects oversize files with a plain Error before any request is made.
+      if (session === getSessionVersion()) setActionError(extractErrorMessage(error,
+        error instanceof Error && !("isAxiosError" in error) ? error.message : "Không tải được ảnh. Vui lòng thử lại."));
+    } finally {
+      setUploadingImage(false);
+    }
   }
 
   function handleSubmit(e: FormEvent) {
@@ -397,6 +422,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
                 if (m.replyPreview?.isAvailable) void openReference({ ...m, id: m.replyPreview.id, sequence: m.replyPreview.sequence ?? 0 });
               }}>{m.replyPreview.isAvailable ? `${m.replyPreview.senderName ?? "Người dùng"}: ${m.replyPreview.contentSnippet ?? ""}` : "Tin nhắn gốc không khả dụng"}</button>}
               {m.status !== "Deleted" && m.attachments?.map(a => <PrivateAttachment key={a.id} messageId={m.id} attachment={a} />)}
+              {(m.status === "Sending" || m.status === "Failed") && m.assetId && !m.attachments?.length && <small className="message-bubble__pending-media">Ảnh</small>}
               {m.status === "Deleted" ? <p className="message-bubble__deleted">Tin nhắn đã được thu hồi</p> : <>
                 {m.type === "CallLog" ? <CallLogBubble content={m.content} isCaller={isMine} conversationId={conversation.id} disabled={isBlocked || callBusy || connectionStatus !== "connected"} /> : m.content && <p><MessageText content={m.content} mentions={m.mentions} /></p>}
                 {(m.type === "File" || m.type === "Audio") && !m.attachments?.length && <small>Media không khả dụng.</small>}
@@ -455,7 +481,10 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
         <form className="chat-window__composer" onSubmit={handleSubmit}>
           <div className="chat-window__composer-tools">
           <button type="button" className="icon-btn" title="Emoji (sắp có)" aria-label="Emoji (sắp có)" disabled><SmileIcon /></button>
-          <button type="button" className="icon-btn" title="Gửi ảnh (sắp có)" aria-label="Gửi ảnh (sắp có)" disabled>
+          <input ref={imageInput} type="file" accept="image/jpeg,image/png,image/webp" hidden aria-hidden="true" tabIndex={-1}
+            onChange={e => { void handleImagePicked(e.target.files?.[0]); }} />
+          <button type="button" className="icon-btn" title={uploadingImage ? "Đang tải ảnh…" : "Gửi ảnh"} aria-label={uploadingImage ? "Đang tải ảnh" : "Gửi ảnh"}
+            aria-busy={uploadingImage} disabled={uploadingImage} onClick={() => imageInput.current?.click()}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8" cy="8" r="2" /><path d="m3 18 6-6 4 4 3-3 5 5" /></svg>
           </button>
           <button type="button" className="icon-btn" title="Đính kèm (sắp có)" disabled>
