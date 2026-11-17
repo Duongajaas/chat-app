@@ -255,7 +255,10 @@ export async function syncCall(rebind = false) {
   try {
     if (pendingStart) { await reconcileStart(); return; }
     const current = state().call && alive(state().call!) ? state().call : null;
-    const { data } = await apiClient.get<CallSnapshot | null>(current ? `/calls/${current.id}` : "/calls/active", { params: { endpointId: endpoint?.endpointId } });
+    let data : any;
+    if (current) {
+        data = await apiClient.get<CallSnapshot | null>(current ? `/calls/${current.id}` : "/calls/active", { params: { endpointId: endpoint?.endpointId } });
+    }
     if (session !== getSessionVersion() || op !== operation) return;
     if (data && typeof data.id === "string") {
       if (shouldResume && data.ownsEndpoint && alive(data) && endpoint && !ending) {
