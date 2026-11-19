@@ -5,6 +5,8 @@ import { useCallStore } from "../store/callStore";
 import { messagesApi } from "../api/messages";
 import { uploadMedia } from "../api/files";
 import { DOCUMENT_EXTENSIONS, IMAGE_TYPES, isAllowedDocument, isImageType } from "../utils/attachments";
+import { VoiceError, VoiceRecorder, canRecordVoice, describeVoiceError } from "../realtime/voiceRecorder";
+import { MAX_VOICE_SECONDS, formatDuration } from "../utils/voice";
 import { groupsApi, type GroupMember } from "../api/groups";
 import { collectMentions, prependReplyMention, type MentionInput } from "../utils/mentions";
 import { MessageText } from "./MessageText";
@@ -15,7 +17,7 @@ import { extractErrorMessage } from "../api/auth";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { GroupSettings } from "./GroupSettings";
 import { Avatar } from "./Avatar";
-import { PhoneIcon, VideoIcon, SendIcon, PaperclipIcon, SmileIcon, MoreIcon, ReplyIcon, ForwardIcon, PinIcon, ArrowLeftIcon, CloseIcon, PlusCircleIcon } from "./icons";
+import { MicIcon, TrashIcon, PhoneIcon, VideoIcon, SendIcon, PaperclipIcon, SmileIcon, MoreIcon, ReplyIcon, ForwardIcon, PinIcon, ArrowLeftIcon, CloseIcon, PlusCircleIcon } from "./icons";
 import type { Conversation, ChatMessage } from "../types";
 import { sendTyping, markConversationAsRead } from "../realtime/connection";
 import { usePresenceStore } from "../store/presenceStore";
@@ -75,7 +77,22 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   const composerInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState<"image" | "file" | null>(null);
+  const [uploading, setUploading] = useState<"image" | "file" | "voice" | null>(null);
+  const [recording, setRecording] = useState<{ seconds: number; ready: boolean } | null>(null);
+  const recorderRef = useRef<VoiceRecorder | null>(null);
+  const finishingVoice = useRef(false);
+  // Leaving the chat (or the page) discards an unfinished recording and releases the microphone.
+  useEffect(() => () => {
+    if (recorderRef.current) { recorderRef.current.cancel(); recorderRef.current = null; setRecording(null); }
+  }, [conversation?.id]);
+  useEffect(() => {
+    if (!recording) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { recorderRef.current?.cancel(); recorderRef.current = null; setRecording(null); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [recording !== null]);
   const activeConversation = useRef(conversation?.id);
   activeConversation.current = conversation?.id;
   const referenceRequest = useRef(0);
@@ -264,6 +281,57 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
     }
   }
 
+  async function startRecording() {
+    if (uploading || recording || isBlocked) return;
+    if (!canRecordVoice()) { setActionError("Trình duyệt này chưa hỗ trợ ghi âm."); return; }
+    setActionError("");
+    const recorder = new VoiceRecorder();
+    recorderRef.current = recorder;
+    setRecording({ seconds: 0, ready: false }); // not ready until the browser grants the microphone
+    try {
+      await recorder.start(seconds => {
+        setRecording({ seconds, ready: true });
+        if (seconds >= MAX_VOICE_SECONDS) void finishRecording();
+      });
+      setRecording(current => (current ? { ...current, ready: true } : current));
+      // Cancelled (or the chat changed) while the browser was asking for microphone permission.
+      if (recorderRef.current !== recorder) recorder.cancel();
+    } catch (error) {
+      if (recorderRef.current === recorder) { recorderRef.current = null; setRecording(null); }
+      setActionError(describeVoiceError(error));
+    }
+  }
+
+  function cancelRecording() {
+    recorderRef.current?.cancel();
+    recorderRef.current = null;
+    setRecording(null);
+  }
+
+  async function finishRecording() {
+    const recorder = recorderRef.current;
+    if (!recorder || finishingVoice.current) return;
+    finishingVoice.current = true;
+    const targetConversationId = conversationId;
+    const session = getSessionVersion();
+    try {
+      const result = await recorder.stop();
+      recorderRef.current = null; setRecording(null); setActionError(""); setUploading("voice");
+      const uploaded = await uploadMedia(result.file);
+      // Do not post into a different chat or account if the user switched while uploading.
+      if (session !== getSessionVersion() || useChatStore.getState().activeConversationId !== targetConversationId) return;
+      onSendMessage("", { assetId: uploaded.assetId, voiceDuration: result.durationSeconds,
+        waveformPoints: JSON.stringify(result.waveform), replyToMessageId: reply?.id, attachmentName: "Tin nhắn thoại" });
+      setReply(null);
+    } catch (error) {
+      recorderRef.current = null; setRecording(null);
+      if (session === getSessionVersion()) setActionError(error instanceof VoiceError ? error.message
+        : extractErrorMessage(error, error instanceof Error && !("isAxiosError" in error) ? error.message : "Không gửi được tin nhắn thoại. Vui lòng thử lại."));
+    } finally {
+      finishingVoice.current = false; setUploading(null);
+    }
+  }
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!draft.trim() || conversation?.hasLeft || conversation?.closedAt || conversation?.isBlocked) return;
@@ -429,9 +497,9 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
               {m.replyPreview && m.status !== "Deleted" && <button className="reply-preview" disabled={!m.replyPreview.isAvailable} onClick={() => {
                 if (m.replyPreview?.isAvailable) void openReference({ ...m, id: m.replyPreview.id, sequence: m.replyPreview.sequence ?? 0 });
               }}>{m.replyPreview.isAvailable ? `${m.replyPreview.senderName ?? "Người dùng"}: ${m.replyPreview.contentSnippet ?? ""}` : "Tin nhắn gốc không khả dụng"}</button>}
-              {m.status !== "Deleted" && m.attachments?.map(a => <PrivateAttachment key={a.id} messageId={m.id} attachment={a} />)}
+              {m.status !== "Deleted" && m.attachments?.map(a => <PrivateAttachment key={a.id} messageId={m.id} attachment={a} voice={{ duration: m.voiceDuration, waveform: m.waveformPoints }} />)}
               {(m.status === "Sending" || m.status === "Failed") && m.assetId && !m.attachments?.length &&
-                <small className="message-bubble__pending-media">{m.pendingAttachmentName ? `📎 ${m.pendingAttachmentName}` : "Ảnh"}</small>}
+                <small className="message-bubble__pending-media">{m.voiceDuration ? `🎤 Tin nhắn thoại (${formatDuration(m.voiceDuration)})` : m.pendingAttachmentName ? `📎 ${m.pendingAttachmentName}` : "Ảnh"}</small>}
               {m.status === "Deleted" ? <p className="message-bubble__deleted">Tin nhắn đã được thu hồi</p> : <>
                 {m.type === "CallLog" ? <CallLogBubble content={m.content} isCaller={isMine} conversationId={conversation.id} disabled={isBlocked || callBusy || connectionStatus !== "connected"} /> : m.content && <p><MessageText content={m.content} mentions={m.mentions} /></p>}
                 {(m.type === "File" || m.type === "Audio") && !m.attachments?.length && <small>Media không khả dụng.</small>}
@@ -486,6 +554,14 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
       </div>}
       {isBlocked ? (
         <div className="chat-window__blocked-message">{conversation.type === "Group" ? "Bạn không còn quyền gửi tin trong nhóm này." : "Bạn không thể nhắn tin với người này."}</div>
+      ) : recording ? (
+        <div className="chat-window__composer voice-recorder" role="group" aria-label="Đang ghi âm tin nhắn thoại">
+          <button type="button" className="icon-btn" aria-label="Hủy ghi âm" title="Hủy ghi âm (Esc)" onClick={cancelRecording}><TrashIcon /></button>
+          <span className="voice-recorder__dot" aria-hidden="true" />
+          <span className="voice-recorder__time" role="timer">{formatDuration(recording.seconds)} / {formatDuration(MAX_VOICE_SECONDS)}</span>
+          <span className="voice-recorder__hint">{recording.ready ? "Đang ghi âm…" : "Đang chờ micro…"}</span>
+          <button type="button" className="icon-btn icon-btn--send" aria-label="Gửi tin nhắn thoại" title="Gửi" disabled={!recording.ready} onClick={() => void finishRecording()}><SendIcon /></button>
+        </div>
       ) : (
         <form className="chat-window__composer" onSubmit={handleSubmit}>
           <div className="chat-window__composer-tools">
@@ -502,6 +578,11 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
             aria-label={uploading === "file" ? "Đang tải file" : "Gửi file"}
             aria-busy={uploading === "file"} disabled={uploading !== null} onClick={() => fileInput.current?.click()}>
             <PaperclipIcon />
+          </button>
+          <button type="button" className="icon-btn" title={uploading === "voice" ? "Đang gửi tin nhắn thoại…" : "Ghi âm tin nhắn thoại"}
+            aria-label={uploading === "voice" ? "Đang gửi tin nhắn thoại" : "Ghi âm tin nhắn thoại"}
+            aria-busy={uploading === "voice"} disabled={uploading !== null} onClick={() => void startRecording()}>
+            <MicIcon />
           </button>
           <button type="button" className="icon-btn" title="Thêm tiện ích (sắp có)" aria-label="Thêm tiện ích (sắp có)" disabled><PlusCircleIcon /></button>
           </div>

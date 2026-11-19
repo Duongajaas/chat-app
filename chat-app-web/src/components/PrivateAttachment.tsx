@@ -2,10 +2,12 @@
 import { apiClient, getSessionVersion, onSessionCleared } from "../api/client";
 import type { ChatMessage } from "../types";
 import { fileBadge, formatBytes, isImageType } from "../utils/attachments";
+import { VoicePlayer } from "./VoicePlayer";
 
 type Attachment = NonNullable<ChatMessage["attachments"]>[number];
 
-export function PrivateAttachment({ messageId, attachment }: { messageId: string; attachment: Attachment }) {
+export function PrivateAttachment({ messageId, attachment, voice }: { messageId: string; attachment: Attachment;
+  voice?: { duration?: number | null; waveform?: string | null } }) {
   const [url, setUrl] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -71,7 +73,13 @@ export function PrivateAttachment({ messageId, attachment }: { messageId: string
   }
 
   const name = attachment.fileName || (image ? "ảnh" : "tệp đính kèm");
-  if (!image && !audio) {
+  if (audio) {
+    return <div ref={container} className="private-attachment" onClick={event => event.stopPropagation()}>
+      <VoicePlayer load={load} busy={busy} duration={voice?.duration} waveform={voice?.waveform} />
+      {error && <small role="alert">{error}</small>}
+    </div>;
+  }
+  if (!image) {
     const size = formatBytes(attachment.fileSize);
     return <div ref={container} className="private-attachment" onClick={event => event.stopPropagation()}>
       <button type="button" className="file-card" disabled={busy} onClick={() => void download()}
