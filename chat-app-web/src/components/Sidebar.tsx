@@ -55,6 +55,11 @@ export function Sidebar() {
               <NavLink to="/settings" className="user-menu__item" onClick={() => setMenuOpen(false)}>
                 Cài đặt
               </NavLink>
+              {(user?.role === "Moderator" || user?.role === "Admin") && (
+                <NavLink to="/moderation" className="user-menu__item" onClick={() => setMenuOpen(false)}>
+                  🛡 Kiểm duyệt báo cáo
+                </NavLink>
+              )}
               <button className="user-menu__item user-menu__item--danger" onClick={logout}>
                 Đăng xuất
               </button>

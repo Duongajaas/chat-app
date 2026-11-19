@@ -21,6 +21,8 @@ export interface BlockedUser {
   blockedAt: string;
 }
 
+export type UserRole = "User" | "Moderator" | "Admin";
+
 export interface User {
   id: string;
   username: string;
@@ -30,6 +32,9 @@ export interface User {
   avatarUrl: string | null;
   bio: string | null;
   isVerified: boolean;
+  role?: UserRole;
+  isFlagged?: boolean;
+  restrictedUntil?: string | null;
 }
 
 export interface AuthResponse {
@@ -82,6 +87,7 @@ export interface Conversation {
   createdAt?: string;
   updatedAt?: string;
   lastMessageId?: string | null;
+  defaultMessageTtlSeconds?: number | null;
 }
 
 export interface PinnedMessage { id: string; pinnedBy?: string | null; createdAt: string; message: ChatMessage; }
@@ -112,7 +118,9 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   clientMessageId?: string;
-  status?: "Sending" | "Sent" | "Failed" | "Deleted" | "Hidden" | "Unavailable";
+  status?: "Sending" | "Sent" | "Failed" | "Deleted" | "Hidden" | "Unavailable" | "Expired";
+  expiresAt?: string | null;
+  ttlSeconds?: number | null;
 }
 
 export interface MessageListResponse {
@@ -123,3 +131,48 @@ export interface MessageListResponse {
 }
 
 export interface ConversationPage { items: Conversation[]; nextCursor: string | null; }
+
+export type ReportTargetType = "User" | "Message" | "Conversation";
+export type ReportStatus = "Pending" | "Reviewing" | "Resolved" | "Dismissed";
+
+export interface CreateReportRequest {
+  targetType: ReportTargetType;
+  targetId: string;
+  reason: string;
+  description?: string;
+}
+
+export interface Report {
+  id: string;
+  reporterId: string;
+  reporterName?: string | null;
+  targetType: ReportTargetType;
+  targetId: string;
+  targetUserId?: string | null;
+  targetPreview?: string | null;
+  reason: string;
+  description?: string | null;
+  status: ReportStatus;
+  reviewedBy?: string | null;
+  reviewedByName?: string | null;
+  reviewedAt?: string | null;
+  moderatorNotes?: string | null;
+  createdAt: string;
+}
+
+export interface ModerationDecisionRequest {
+  decision: "Dismiss" | "Warn" | "DeleteMessage" | "FlagUser" | "RestrictUser";
+  moderatorNotes?: string;
+  restrictionMinutes?: number;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  action: string;
+  userId?: string | null;
+  actorName?: string | null;
+  targetId?: string | null;
+  ipAddress?: string | null;
+  details?: string | null;
+  createdAt: string;
+}

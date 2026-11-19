@@ -3,6 +3,7 @@ using ChatApp.DTOs;
 using ChatApp.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace ChatApp.Controllers;
 
@@ -24,14 +25,14 @@ public class BlocksController : ControllerBase
         return Ok(await _blockService.GetBlockedUsersAsync(CurrentUserId));
     }
 
-    [HttpPost("{userId:guid}")]
+    [HttpPost("{userId:guid}"), EnableRateLimiting("chat-write")]
     public async Task<IActionResult> BlockUser(Guid userId)
     {
         await _blockService.BlockUserAsync(CurrentUserId, userId);
         return NoContent();
     }
 
-    [HttpDelete("{userId:guid}")]
+    [HttpDelete("{userId:guid}"), EnableRateLimiting("chat-write")]
     public async Task<IActionResult> UnblockUser(Guid userId)
     {
         await _blockService.UnblockUserAsync(CurrentUserId, userId);

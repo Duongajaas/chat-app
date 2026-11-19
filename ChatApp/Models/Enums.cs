@@ -10,6 +10,7 @@ public enum CallType { Audio, Video }
 public enum CallStatus { Ringing, Accepted, Rejected, Missed, Canceled, Ended, Busy, Failed }
 public enum CallParticipantStatus { Invited, Ringing, Joined, Left, Rejected, Missed }
 public enum DevicePlatform { Web, Android, Ios, Desktop }
+public enum UserRole { User = 0, Moderator = 1, Admin = 2 }
 public enum ReportTargetType { User, Message, Conversation }
 public enum ReportStatus { Pending, Reviewing, Resolved, Dismissed }
 public enum NotificationStatus { Created, Sent, Failed, Read }

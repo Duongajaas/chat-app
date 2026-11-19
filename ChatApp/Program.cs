@@ -51,7 +51,7 @@ var rateLimitOptions = builder.Configuration
     .Get<RateLimitingOptions>() ?? new RateLimitingOptions();
 builder.Services.AddOptions<RateLimitingOptions>().BindConfiguration(RateLimitingOptions.SectionName)
     .Validate(o => new[] { o.Login, o.Register, o.RefreshToken, o.ForgotPassword, o.ResetPassword,
-        o.GoogleLogin, o.ResolveFriendLink, o.GetMessages }.All(r => r.PermitLimit > 0 && r.WindowSeconds > 0),
+        o.GoogleLogin, o.ResolveFriendLink, o.GetMessages, o.FriendRequest, o.Report }.All(r => r.PermitLimit > 0 && r.WindowSeconds > 0),
         "Rate limits must have positive limits and windows")
     .ValidateOnStart();
 
@@ -60,12 +60,15 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     ApplicationConfiguration.ConfigureDatabase(options, builder.Configuration));
 
 // ---------- Services ----------
+builder.Services.AddSingleton<IMessageEncryptionService, AesGcmMessageEncryptionService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<IGoogleAuthService, GoogleAuthService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<GroupService>();
+builder.Services.AddScoped<IAuditService, AuditService>();
+builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.Configure<CloudinaryOptions>(builder.Configuration.GetSection("Cloudinary"));
 // Local .env files often use the Compose-style CLOUDINARY_* names; only fill values the Cloudinary section left empty.
 builder.Services.PostConfigure<CloudinaryOptions>(o =>
@@ -215,6 +218,8 @@ builder.Services.AddAuthorization(options =>
     // Ví dụ policy: bắt buộc email đã verify mới được thao tác 1 số action nhạy cảm
     options.AddPolicy("RequireVerifiedUser", policy =>
         policy.RequireClaim("email_verified", "true"));
+    options.AddPolicy("RequireModerator", policy =>
+        policy.RequireRole(nameof(ChatApp.Models.UserRole.Moderator), nameof(ChatApp.Models.UserRole.Admin)));
 });
 
 // ---------- Rate Limiting ----------
@@ -225,6 +230,10 @@ builder.Services.AddRateLimiter(options =>
     options.OnRejected = async (context, cancellationToken) =>
     {
         context.HttpContext.Response.ContentType = "application/json";
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            context.HttpContext.Response.Headers.RetryAfter = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
         await context.HttpContext.Response.WriteAsync(
             "{\"message\":\"Bạn thao tác quá nhiều lần, vui lòng thử lại sau ít phút.\"}",
             cancellationToken);
@@ -310,6 +319,22 @@ builder.Services.AddRateLimiter(options =>
         {
             PermitLimit = rateLimitOptions.GetMessages.PermitLimit,
             Window = TimeSpan.FromSeconds(rateLimitOptions.GetMessages.WindowSeconds),
+            QueueLimit = 0
+        }));
+
+    options.AddPolicy(RateLimitPolicies.FriendRequest, httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? PartitionKey(httpContext), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = rateLimitOptions.FriendRequest.PermitLimit,
+            Window = TimeSpan.FromSeconds(rateLimitOptions.FriendRequest.WindowSeconds),
+            QueueLimit = 0
+        }));
+
+    options.AddPolicy(RateLimitPolicies.Report, httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? PartitionKey(httpContext), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = rateLimitOptions.Report.PermitLimit,
+            Window = TimeSpan.FromSeconds(rateLimitOptions.Report.WindowSeconds),
             QueueLimit = 0
         }));
 });
