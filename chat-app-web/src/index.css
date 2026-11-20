@@ -1138,3 +1138,20 @@ input:focus-visible, select:focus-visible {  }
 .conversation-item.is-active { box-shadow: inset 3px 0 0 var(--color-accent); }
 .unread-badge { background: #e5383b; color: #ffffff; }
 .icon-btn--send { border-radius: 12px; }
+
+/* ============ Voice messages ============ */
+.chat-window__composer.voice-recorder { display: flex; align-items: center; gap: 12px; }
+.voice-recorder__dot { width: 10px; height: 10px; border-radius: 50%; background: var(--color-danger); animation: voice-pulse 1.2s ease-in-out infinite; }
+.voice-recorder__time { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 14px; }
+.voice-recorder__hint { flex: 1; font-size: 13px; color: var(--color-text-muted); }
+@keyframes voice-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .voice-recorder__dot { animation: none; } }
+.voice-player { display: flex; align-items: center; gap: 10px; width: 240px; max-width: 100%; }
+.voice-player__button { flex: none; width: 34px; height: 34px; border: 0; border-radius: 50%; display: grid; place-items: center; background: var(--color-accent); color: #ffffff; cursor: pointer; }
+.voice-player__button:hover:not(:disabled) { background: var(--color-accent-strong); }
+.voice-player__button:disabled { opacity: .6; cursor: progress; }
+.voice-player__button:focus-visible { outline: 2px solid var(--color-accent-strong); outline-offset: 2px; }
+.voice-player__bars { flex: 1; min-width: 0; height: 28px; display: flex; align-items: center; gap: 2px; }
+.voice-player__bars span { flex: 1; min-width: 2px; max-width: 4px; border-radius: 2px; background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+.voice-player__bars span.is-played { background: var(--color-accent); }
+.voice-player__time { flex: none; min-width: 34px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--color-text-muted); text-align: right; }

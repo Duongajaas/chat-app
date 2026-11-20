@@ -84,6 +84,24 @@ public class SecurityContractTests
         Assert.Throws<AppException>(() => MediaValidation.Detect(Encoding.UTF8.GetBytes("<html><body>not a pdf</body>"), "fake.pdf"));
     }
 
+    [Theory]
+    [InlineData("voice.webm", new byte[] { 0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01, 0x42, 0xf7, 0x81 }, "audio/webm")]
+    [InlineData("voice.ogg", new byte[] { 0x4f, 0x67, 0x67, 0x53, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, "audio/ogg")]
+    [InlineData("voice.m4a", new byte[] { 0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d }, "audio/mp4")]
+    public void Recorded_voice_formats_from_every_browser_are_accepted(string name, byte[] bytes, string expected)
+    {
+        Assert.Equal(expected, MediaValidation.Detect(bytes, name));
+    }
+
+    [Fact]
+    public void Mp4_container_is_only_audio_when_named_m4a()
+    {
+        var mp4 = new byte[] { 0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d };
+        Assert.Throws<AppException>(() => MediaValidation.Detect(mp4, "clip.mp4"));
+        Assert.Throws<AppException>(() => MediaValidation.Detect(mp4, "voice.webm"));
+        Assert.Throws<AppException>(() => MediaValidation.Detect(mp4));
+    }
+
     [Fact]
     public void Nameless_detection_still_only_accepts_images_and_audio()
     {
