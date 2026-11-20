@@ -4,7 +4,8 @@ import { startCall } from "../realtime/callManager";
 import { useCallStore } from "../store/callStore";
 import { messagesApi } from "../api/messages";
 import { uploadMedia } from "../api/files";
-import { DOCUMENT_EXTENSIONS, IMAGE_TYPES, isAllowedDocument, isImageType } from "../utils/attachments";
+import { DOCUMENT_EXTENSIONS, IMAGE_TYPES, describeBatchFailures, planAttachmentBatch, type RejectedFile } from "../utils/attachments";
+import axios from "axios";
 import { VoiceError, VoiceRecorder, canRecordVoice, describeVoiceError } from "../realtime/voiceRecorder";
 import { MAX_VOICE_SECONDS, formatDuration } from "../utils/voice";
 import { groupsApi, type GroupMember } from "../api/groups";
@@ -78,6 +79,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   const imageInput = useRef<HTMLInputElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState<"image" | "file" | "voice" | null>(null);
+  const [batch, setBatch] = useState<{ done: number; total: number } | null>(null);
   const [recording, setRecording] = useState<{ seconds: number; ready: boolean } | null>(null);
   const recorderRef = useRef<VoiceRecorder | null>(null);
   const finishingVoice = useRef(false);
@@ -254,31 +256,51 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
     );
   }
 
-  async function handleAttachmentPicked(file: File | undefined, kind: "image" | "file") {
+  async function handleAttachmentsPicked(picked: File[], kind: "image" | "file") {
     if (imageInput.current) imageInput.current.value = "";
     if (fileInput.current) fileInput.current.value = "";
-    if (!file || uploading || isBlocked) return;
-    if (kind === "image" && !isImageType(file.type)) { setActionError("Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP."); return; }
-    if (kind === "file" && !isImageType(file.type) && !isAllowedDocument(file.name)) {
-      setActionError("Chỉ hỗ trợ PDF, Word, Excel, PowerPoint, ZIP và văn bản (TXT, CSV, MD)."); return;
+    if (picked.length === 0 || uploading || isBlocked) return;
+    const { accepted, rejected } = planAttachmentBatch(picked, kind);
+    if (accepted.length === 0) {
+      // Nothing to send: remind the user which formats work.
+      const wrongFormat = rejected.some(r => r.reason.startsWith("định dạng") || r.reason.startsWith("không phải ảnh"));
+      const hint = !wrongFormat ? "" : kind === "image" ? " Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP."
+        : " Chỉ hỗ trợ PDF, Word, Excel, PowerPoint, ZIP và văn bản (TXT, CSV, MD).";
+      setActionError(describeBatchFailures(0, picked.length, rejected) + hint); return;
     }
     const targetConversationId = conversationId;
     const session = getSessionVersion();
-    setActionError(""); setUploading(kind);
+    const failures: RejectedFile[] = [...rejected];
+    let sent = 0; let stopped = "";
+    setActionError(""); setUploading(kind); setBatch({ done: 0, total: accepted.length });
     try {
-      const uploaded = await uploadMedia(file);
-      // Do not post into a different chat or account if the user switched while uploading.
-      if (session !== getSessionVersion() || useChatStore.getState().activeConversationId !== targetConversationId) return;
-      onSendMessage("", { assetId: uploaded.assetId, replyToMessageId: reply?.id, attachmentName: uploaded.fileName || file.name });
-      setReply(null);
-    } catch (error) {
-      // uploadMedia rejects oversize files with a plain Error before any request is made.
-      if (session === getSessionVersion()) setActionError(extractErrorMessage(error,
-        error instanceof Error && !("isAxiosError" in error) ? error.message
-          : kind === "image" ? "Không tải được ảnh. Vui lòng thử lại." : "Không tải được file. Vui lòng thử lại."));
+      // One message per file, uploaded in order so they arrive in the order they were chosen.
+      for (const [index, file] of accepted.entries()) {
+        // Never post into a different chat or account if the user switched while uploading.
+        if (session !== getSessionVersion() || useChatStore.getState().activeConversationId !== targetConversationId) return;
+        setBatch({ done: index, total: accepted.length });
+        try {
+          const uploaded = await uploadMedia(file);
+          if (session !== getSessionVersion() || useChatStore.getState().activeConversationId !== targetConversationId) return;
+          // A quoted reply belongs to the first message only.
+          onSendMessage("", { assetId: uploaded.assetId, replyToMessageId: sent === 0 ? reply?.id : undefined, attachmentName: uploaded.fileName || file.name });
+          if (sent === 0) setReply(null);
+          sent++;
+        } catch (error) {
+          if (session !== getSessionVersion()) return;
+          if (axios.isAxiosError(error) && error.response?.status === 429) {
+            const left = accepted.length - index;
+            stopped = `Bạn thao tác quá nhanh nên ${left} mục còn lại chưa được gửi. Hãy đợi một chút rồi gửi lại.`;
+            break;
+          }
+          const fallback = kind === "image" ? "không tải được ảnh" : "không tải được file";
+          failures.push({ name: file.name, reason: extractErrorMessage(error, error instanceof Error && !("isAxiosError" in error) ? error.message : fallback) });
+        }
+      }
     } finally {
-      setUploading(null);
+      setUploading(null); setBatch(null);
     }
+    if (session === getSessionVersion()) setActionError(describeBatchFailures(sent, picked.length, failures, stopped));
   }
 
   async function startRecording() {
@@ -341,6 +363,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   }
 
   const conversationId = conversation.id;
+  const batchProgress = batch && batch.total > 1 ? ` ${Math.min(batch.done + 1, batch.total)}/${batch.total}` : "";
   const isBlocked = conversation.isBlocked === true || conversation.hasLeft === true || !!conversation.closedAt;
   const isDirectOnline = !isBlocked && conversation.type === "Direct" && (conversation.peerUserId ? onlineUserIds.has(conversation.peerUserId) : conversation.isOnline);
   const isAdmin = conversation.isAdmin === true;
@@ -566,16 +589,16 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
         <form className="chat-window__composer" onSubmit={handleSubmit}>
           <div className="chat-window__composer-tools">
           <button type="button" className="icon-btn" title="Emoji (sắp có)" aria-label="Emoji (sắp có)" disabled><SmileIcon /></button>
-          <input ref={imageInput} type="file" accept={IMAGE_TYPES.join(",")} hidden aria-hidden="true" tabIndex={-1}
-            onChange={e => { void handleAttachmentPicked(e.target.files?.[0], "image"); }} />
-          <input ref={fileInput} type="file" accept={[...DOCUMENT_EXTENSIONS, ...IMAGE_TYPES].join(",")} hidden aria-hidden="true" tabIndex={-1}
-            onChange={e => { void handleAttachmentPicked(e.target.files?.[0], "file"); }} />
-          <button type="button" className="icon-btn" title={uploading === "image" ? "Đang tải ảnh…" : "Gửi ảnh"} aria-label={uploading === "image" ? "Đang tải ảnh" : "Gửi ảnh"}
+          <input ref={imageInput} type="file" multiple accept={IMAGE_TYPES.join(",")} hidden aria-hidden="true" tabIndex={-1}
+            onChange={e => { void handleAttachmentsPicked(Array.from(e.target.files ?? []), "image"); }} />
+          <input ref={fileInput} type="file" multiple accept={[...DOCUMENT_EXTENSIONS, ...IMAGE_TYPES].join(",")} hidden aria-hidden="true" tabIndex={-1}
+            onChange={e => { void handleAttachmentsPicked(Array.from(e.target.files ?? []), "file"); }} />
+          <button type="button" className="icon-btn" title={uploading === "image" ? `Đang tải ảnh${batchProgress}…` : "Gửi ảnh (chọn được nhiều ảnh)"} aria-label={uploading === "image" ? `Đang tải ảnh${batchProgress}` : "Gửi ảnh"}
             aria-busy={uploading === "image"} disabled={uploading !== null} onClick={() => imageInput.current?.click()}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8" cy="8" r="2" /><path d="m3 18 6-6 4 4 3-3 5 5" /></svg>
           </button>
-          <button type="button" className="icon-btn" title={uploading === "file" ? "Đang tải file…" : "Gửi file (PDF, Word, Excel, PowerPoint, ZIP, TXT – tối đa 8 MB)"}
-            aria-label={uploading === "file" ? "Đang tải file" : "Gửi file"}
+          <button type="button" className="icon-btn" title={uploading === "file" ? `Đang tải file${batchProgress}…` : "Gửi file (chọn được nhiều file; PDF, Word, Excel, PowerPoint, ZIP, TXT – tối đa 8 MB mỗi file)"}
+            aria-label={uploading === "file" ? `Đang tải file${batchProgress}` : "Gửi file"}
             aria-busy={uploading === "file"} disabled={uploading !== null} onClick={() => fileInput.current?.click()}>
             <PaperclipIcon />
           </button>
