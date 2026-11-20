@@ -33,4 +33,6 @@ public class RateLimitingOptions
     public RateLimitRule GoogleLogin { get; set; } = new();
     public RateLimitRule ResolveFriendLink { get; set; } = new() { PermitLimit = 20, WindowSeconds = 60 };
     public RateLimitRule GetMessages { get; set; } = new() { PermitLimit = 60, WindowSeconds = 60 };
+    public RateLimitRule FriendRequest { get; set; } = new() { PermitLimit = 20, WindowSeconds = 60 };
+    public RateLimitRule Report { get; set; } = new() { PermitLimit = 10, WindowSeconds = 60 };
 }

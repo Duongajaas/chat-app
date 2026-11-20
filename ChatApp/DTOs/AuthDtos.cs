@@ -45,7 +45,9 @@ public record UserResponse(
     string FullName,
     string? AvatarUrl,
     string? Bio,
-    bool IsVerified
+    bool IsVerified,
+    UserRole Role = UserRole.User,
+    bool IsFlagged = false
 );
 
 public record AuthResponse(

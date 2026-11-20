@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using ChatApp.Common;
 using ChatApp.DTOs;
 using ChatApp.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -43,6 +44,16 @@ public class GroupsController(GroupService groups, IConversationService conversa
         await groups.SetRoleAsync(UserId, id, target, request.Role);
         return NoContent();
     }
+
+    [HttpPut("{id:guid}/owner"), EnableRateLimiting("group-write")]
+    public async Task<IActionResult> TransferOwnership(Guid id, TransferOwnershipRequest request)
+    {
+        await groups.TransferOwnershipAsync(UserId, id, request.NewOwnerId);
+        return NoContent();
+    }
+
+    [HttpGet("{id:guid}/audit-logs"), EnableRateLimiting(RateLimitPolicies.GetMessages)]
+    public async Task<IActionResult> AuditLogs(Guid id) => Ok(await groups.GetAuditLogsAsync(UserId, id));
 
     [HttpGet("{id:guid}/invites")]
     public async Task<IActionResult> Invites(Guid id) => Ok(await groups.InvitesAsync(UserId, id));

@@ -1,4 +1,4 @@
-﻿using ChatApp.Calls;
+using ChatApp.Calls;
 using ChatApp.Common;
 using System.Security.Claims;
 using ChatApp.Data;
@@ -38,6 +38,9 @@ public class ChatHub(AppDbContext db, IPresenceTracker presence, IMessageService
 
     public async Task Typing(Guid conversationId, bool isTyping)
     {
+        var senderUser = await db.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Id == UserId, Context.ConnectionAborted);
+        if (senderUser?.RestrictedUntil != null && senderUser.RestrictedUntil > DateTime.UtcNow) return;
+
         await using var tx = await db.Database.BeginTransactionAsync(Context.ConnectionAborted);
         await ConversationLock.AcquireAsync(db, conversationId, Context.ConnectionAborted);
         await EnsureMemberAsync(conversationId);

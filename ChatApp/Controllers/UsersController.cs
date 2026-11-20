@@ -3,6 +3,7 @@ using ChatApp.Data;
 using ChatApp.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace ChatApp.Controllers;
 
@@ -24,10 +25,10 @@ public class UsersController : ControllerBase
         var user = await _db.Users.FindAsync(CurrentUserId);
         if (user is null) return NotFound();
 
-        return Ok(new UserResponse(user.Id, user.Username, user.Email, user.Phone, user.FullName, user.AvatarUrl, user.Bio, user.IsVerified));
+        return Ok(new UserResponse(user.Id, user.Username, user.Email, user.Phone, user.FullName, user.AvatarUrl, user.Bio, user.IsVerified, user.Role, user.IsFlagged));
     }
 
-    [HttpPut("me")]
+    [HttpPut("me"), EnableRateLimiting("chat-write")]
     public async Task<ActionResult<UserResponse>> UpdateMe(UpdateProfileRequest request)
     {
         var user = await _db.Users.FindAsync(CurrentUserId);
@@ -41,7 +42,7 @@ public class UsersController : ControllerBase
 
         await _db.SaveChangesAsync();
 
-        return Ok(new UserResponse(user.Id, user.Username, user.Email, user.Phone, user.FullName, user.AvatarUrl, user.Bio, user.IsVerified));
+        return Ok(new UserResponse(user.Id, user.Username, user.Email, user.Phone, user.FullName, user.AvatarUrl, user.Bio, user.IsVerified, user.Role, user.IsFlagged));
     }
 
     private Guid CurrentUserId

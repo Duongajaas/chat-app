@@ -1,14 +1,17 @@
 using System.Security.Claims;
+using ChatApp.Common;
 using ChatApp.DTOs;
 using ChatApp.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace ChatApp.Controllers;
 
 [ApiController]
 [Route("api/friend-requests")]
 [Authorize]
+[EnableRateLimiting(RateLimitPolicies.FriendRequest)]
 public class FriendRequestsController : ControllerBase
 {
     private readonly IFriendService _friendService;

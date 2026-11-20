@@ -25,7 +25,8 @@ public class TokenService : ITokenService
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
             new("username", user.Username),
-            new("email_verified", user.IsVerified.ToString().ToLowerInvariant())
+            new("email_verified", user.IsVerified.ToString().ToLowerInvariant()),
+            new(ClaimTypes.Role, user.Role.ToString())
         };
 
         if (sessionId.HasValue) claims.Add(new Claim("sid", sessionId.Value.ToString()));
