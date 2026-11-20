@@ -11,4 +11,5 @@ public interface IConversationService
     Task<ConversationSummaryResponse> GetConversationByIdAsync(Guid userId, Guid conversationId);
     Task<ConversationSummaryResponse> CreateConversationAsync(Guid userId, CreateConversationRequest request, Guid? key = null);
     Task DeleteConversationAsync(Guid userId, Guid conversationId);
+    Task SetDisappearingAsync(Guid userId, Guid conversationId, int? ttlSeconds);
 }

@@ -10,4 +10,6 @@ public static class RateLimitPolicies
     public const string GoogleLogin = "google-login";
     public const string ResolveFriendLink = "resolve-friend-link";
     public const string GetMessages = "get-messages";
+    public const string FriendRequest = "friend-request";
+    public const string Report = "report";
 }

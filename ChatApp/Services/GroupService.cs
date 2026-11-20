@@ -89,6 +89,52 @@ public class GroupService(AppDbContext db)
         await tx.CommitAsync();
     }
 
+    public async Task TransferOwnershipAsync(Guid actorId, Guid id, Guid newOwnerId)
+    {
+        if (actorId == newOwnerId) throw AppException.BadRequest("Bạn đã là chủ sở hữu của nhóm.");
+        await using var tx = await db.Database.BeginTransactionAsync();
+        await ConversationLock.AcquireAsync(db, id);
+        var (group, actor) = await AuthorizeAsync(actorId, id);
+        if (actor.Role != MemberRole.Owner) throw AppException.Forbidden("Chỉ chủ nhóm mới có quyền chuyển nhượng quyền sở hữu.");
+        var target = await db.ConversationMembers.SingleOrDefaultAsync(m => m.ConversationId == id && m.UserId == newOwnerId && m.LeftAt == null)
+            ?? throw AppException.NotFound("Thành viên nhận quyền không tồn tại hoặc đã rời nhóm.");
+        actor.Role = MemberRole.Admin;
+        target.Role = MemberRole.Owner;
+        await db.SaveChangesAsync();
+        Changed(group, actorId, "TRANSFER_OWNERSHIP", newOwnerId);
+        await db.SaveChangesAsync();
+        await tx.CommitAsync();
+    }
+
+    public async Task<List<AuditLogResponse>> GetAuditLogsAsync(Guid actorId, Guid conversationId)
+    {
+        var (_, actor) = await AuthorizeAsync(actorId, conversationId);
+        if (!GroupPermissionMatrix.HasPermission(actor.Role, "ViewAudit"))
+            throw AppException.Forbidden("Chỉ Owner hoặc Admin mới có quyền xem nhật ký kiểm toán.");
+        var logs = await (from a in db.AuditLogs.AsNoTracking()
+            where a.ConversationId == conversationId
+            orderby a.CreatedAt descending
+            select a).Take(100).ToListAsync();
+        var actorIds = logs.Where(l => l.ActorId != null).Select(l => l.ActorId!.Value).Distinct().ToArray();
+        var targetIds = logs.Where(l => l.TargetUserId != null).Select(l => l.TargetUserId!.Value).Distinct().ToArray();
+        var userIds = actorIds.Concat(targetIds).Distinct().ToArray();
+        var users = await db.Users.AsNoTracking().Where(u => userIds.Contains(u.Id))
+            .Select(u => new { u.Id, u.FullName, u.Username }).ToDictionaryAsync(u => u.Id);
+        return logs.Select(l => new AuditLogResponse(
+            l.Id,
+            l.ConversationId,
+            l.ActorId,
+            l.ActorId != null && users.TryGetValue(l.ActorId.Value, out var act) ? act.FullName : null,
+            l.ActorId != null && users.TryGetValue(l.ActorId.Value, out var actU) ? actU.Username : null,
+            l.Action,
+            l.TargetUserId,
+            l.TargetUserId != null && users.TryGetValue(l.TargetUserId.Value, out var tgt) ? tgt.FullName : null,
+            l.TargetUserId != null && users.TryGetValue(l.TargetUserId.Value, out var tgtU) ? tgtU.Username : null,
+            l.Metadata,
+            l.CreatedAt
+        )).ToList();
+    }
+
     public async Task AddAsync(Guid actorId, Guid id, Guid targetId)
     {
         await using var tx = await db.Database.BeginTransactionAsync();

@@ -26,6 +26,9 @@ public class User
 
     public bool IsActive { get; set; } = true;
     public bool IsVerified { get; set; } = false;
+    public UserRole Role { get; set; } = UserRole.User;
+    public bool IsFlagged { get; set; } = false;
+    public DateTime? RestrictedUntil { get; set; }
 
     public DateTime? LastSeenAt { get; set; }
     public bool HideLastSeen { get; set; } = false;

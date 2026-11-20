@@ -26,4 +26,6 @@ export const groupsApi = {
     `/conversations/${id}/invites`, { maxUses }, { headers: { "Idempotency-Key": key } }).then(r => r.data),
   revoke: (id: string, inviteId: string) => apiClient.delete(`/conversations/${id}/invites/${inviteId}`),
   join: (code: string) => apiClient.post<Conversation>("/conversations/join", { code }).then(r => r.data),
+  transferOwnership: (id: string, newOwnerId: string) => apiClient.put(`/conversations/${id}/owner`, { newOwnerId }).then(r => r.data),
+  auditLogs: (id: string) => apiClient.get<import("../types").AuditLogEntry[]>(`/conversations/${id}/audit-logs`).then(r => r.data),
 };

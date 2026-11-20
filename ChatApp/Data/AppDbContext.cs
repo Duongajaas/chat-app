@@ -232,6 +232,7 @@ public class AppDbContext : DbContext
             e.HasIndex(x => new { x.ConversationId, x.Sequence });
             e.HasIndex(x => x.SenderId);
             e.HasIndex(x => x.DeletedAt);
+            e.HasIndex(x => x.ExpiresAt);
             e.HasOne<Conversation>().WithMany().HasForeignKey(x => x.ConversationId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne<User>().WithMany().HasForeignKey(x => x.SenderId).OnDelete(DeleteBehavior.SetNull);
             e.HasOne<Message>().WithMany().HasForeignKey(x => x.ReplyToMessageId).OnDelete(DeleteBehavior.SetNull);

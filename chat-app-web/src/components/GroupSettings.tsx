@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { groupsApi, type GroupInvite, type GroupMember } from "../api/groups";
+import { conversationsApi } from "../api/conversations";
 import { friendsApi, type Friend } from "../api/friends";
 import { extractErrorMessage } from "../api/auth";
 import { refreshConversation } from "../realtime/connection";
 import { getSessionVersion } from "../api/client";
-import type { Conversation } from "../types";
+import type { Conversation, AuditLogEntry } from "../types";
 import "../index.css";
 import { Avatar } from "./Avatar";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -15,6 +16,9 @@ export function GroupSettings({ conversation, onClose }: { conversation: Convers
   const [members, setMembers] = useState<GroupMember[]>([]);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [invites, setInvites] = useState<GroupInvite[]>([]);
+  const [showAuditLogs, setShowAuditLogs] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
   const [name, setName] = useState(conversation.name);
   const [target, setTarget] = useState("");
   const [error, setError] = useState("");
@@ -102,6 +106,25 @@ export function GroupSettings({ conversation, onClose }: { conversation: Convers
         <label>Tên nhóm<input disabled={busy} value={name} onChange={e => setName(e.target.value)} maxLength={100} required /></label>
         <button disabled={busy || !name.trim() || name.trim() === conversation.name}>Lưu tên</button>
       </form>}
+      {can("RenameGroup") && (
+        <label>⏱ Tin nhắn tự hủy trong nhóm
+          <select
+            disabled={busy}
+            value={conversation.defaultMessageTtlSeconds ?? ""}
+            onChange={(e) => {
+              const val = e.target.value ? Number(e.target.value) : null;
+              void run(() => conversationsApi.setDisappearing(id, val));
+            }}
+          >
+            <option value="">Tắt (Không tự hủy)</option>
+            <option value="30">30 giây</option>
+            <option value="300">5 phút</option>
+            <option value="3600">1 giờ</option>
+            <option value="86400">24 giờ (1 ngày)</option>
+            <option value="604800">7 ngày</option>
+          </select>
+        </label>
+      )}
       <h3>Thành viên <span className="group-settings__count">{members.length}</span></h3>
       <label className="group-settings__search">Tìm thành viên<input type="search" placeholder="Tên hoặc username…" value={memberQuery} onChange={e => setMemberQuery(e.target.value)} /></label>
       {!loading && !visibleMembers.length && <p role="status">{memberQuery ? "Không tìm thấy thành viên phù hợp." : "Chưa tải được danh sách thành viên."}</p>}
@@ -110,6 +133,15 @@ export function GroupSettings({ conversation, onClose }: { conversation: Convers
         {m.canChangeRole && <button disabled={busy} onClick={() => void run(() => groupsApi.role(id, m.userId, m.role === "Admin" ? "Member" : "Admin"))}>
           {m.role === "Admin" ? "Hạ Admin" : "Cấp Admin"}
         </button>}
+        {conversation.role === "Owner" && m.role !== "Owner" && (
+          <button disabled={busy} onClick={() => {
+            setConfirmation({
+              title: `Chuyển quyền Trưởng nhóm cho ${m.fullName}?`,
+              description: "Sau khi chuyển, bạn sẽ thành Thành viên và không còn là Trưởng nhóm.",
+              action: () => groupsApi.transferOwnership(id, m.userId)
+            });
+          }}>Chuyển Trưởng nhóm</button>
+        )}
         {m.canKick && <button disabled={busy} onClick={() => {
           setConfirmation({ title: `Đưa ${m.fullName} ra khỏi nhóm?`, description: "Chỉ Owner hoặc Admin có thể thêm lại người này.", action: () => groupsApi.kick(id, m.userId) });
         }}>Mời ra khỏi nhóm</button>}
@@ -142,6 +174,50 @@ export function GroupSettings({ conversation, onClose }: { conversation: Convers
           {!i.revokedAt && <button disabled={busy} onClick={() => void run(() => groupsApi.revoke(id, i.id))}>Thu hồi</button>}
         </li>)}</ul>
       </>}
+
+      <div style={{ marginTop: 16, marginBottom: 16 }}>
+        <button
+          type="button"
+          disabled={busy || loadingLogs}
+          onClick={async () => {
+            setShowAuditLogs(true);
+            setLoadingLogs(true);
+            try {
+              const logs = await groupsApi.auditLogs(id);
+              if (current()) setAuditLogs(logs);
+            } catch (e) {
+              if (current()) setError(extractErrorMessage(e));
+            } finally {
+              if (current()) setLoadingLogs(false);
+            }
+          }}
+          style={{ width: "100%", padding: "8px", borderRadius: 6, background: "none", border: "1px solid var(--color-border, #ccc)", cursor: "pointer" }}
+        >
+          📋 {loadingLogs ? "Đang tải nhật ký..." : "Xem nhật ký hoạt động nhóm (Audit Log)"}
+        </button>
+      </div>
+
+      {showAuditLogs && (
+        <div style={{ border: "1px solid var(--color-border, #ccc)", borderRadius: 6, padding: 12, marginBottom: 16, maxHeight: 180, overflowY: "auto", fontSize: "0.85rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <strong>Nhật ký nhóm:</strong>
+            <button type="button" onClick={() => setShowAuditLogs(false)} style={{ background: "none", border: "none", cursor: "pointer" }}>✕ Đóng</button>
+          </div>
+          {auditLogs.length === 0 ? (
+            <p style={{ color: "#888", margin: 0 }}>Chưa có hoạt động nào được ghi lại.</p>
+          ) : (
+            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              {auditLogs.map((log) => (
+                <li key={log.id} style={{ borderBottom: "1px solid #eee", padding: "6px 0" }}>
+                  <div><strong>{log.action}</strong> - <span style={{ color: "#888" }}>{new Date(log.createdAt).toLocaleString("vi-VN")}</span></div>
+                  {log.details && <div style={{ color: "#666", fontSize: "0.8rem" }}>{log.details}</div>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       <button className="group-settings__leave" disabled={busy || loading} onClick={() => {
         const successor = members.filter(m => m.role !== "Owner").sort((a, b) =>
           (a.role === "Admin" ? 0 : 1) - (b.role === "Admin" ? 0 : 1) || a.joinedAt.localeCompare(b.joinedAt))[0];

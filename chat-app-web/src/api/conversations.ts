@@ -8,4 +8,6 @@ export const conversationsApi = {
   createGroup: (payload: { name: string; memberIds: string[] }, key: string) => apiClient.post<Conversation>("/conversations/group", { ...payload, type: "Group" }, { headers: { "Idempotency-Key": key } }).then((r) => r.data),
   remove: (conversationId: string) => apiClient.delete(`/conversations/${conversationId}`).then((r) => r.data),
   hide: (conversationId: string) => apiClient.post(`/conversations/${conversationId}/hide`).then((r) => r.data),
+  setDisappearing: (conversationId: string, ttlSeconds: number | null) =>
+    apiClient.put(`/conversations/${conversationId}/disappearing`, { ttlSeconds }).then((r) => r.data),
 };

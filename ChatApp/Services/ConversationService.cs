@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using ChatApp.Common;
 using ChatApp.Data;
 using ChatApp.DTOs;
@@ -8,8 +8,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ChatApp.Services;
 
-public class ConversationService(AppDbContext db) : IConversationService
+public class ConversationService(AppDbContext db, IMessageEncryptionService? encryption = null) : IConversationService
 {
+    private readonly IMessageEncryptionService _encryption = encryption ?? AesGcmMessageEncryptionService.Default;
     public async Task<ConversationSummaryResponse> GetOrCreateDirectConversationAsync(Guid userId, Guid otherUserId)
     {
         if (userId == otherUserId || otherUserId == Guid.Empty) throw AppException.BadRequest("Người nhận không hợp lệ.");
@@ -100,16 +101,17 @@ public class ConversationService(AppDbContext db) : IConversationService
             var member = members[c.Id];
             var peer = peers.FirstOrDefault(p => p.ConversationId == c.Id)?.PeerId;
             var last = previews.GetValueOrDefault(c.Id);
+            if (last?.ExpiresAt != null && last.ExpiresAt <= DateTime.UtcNow) last = null;
             var active = member.LeftAt == null && c.ClosedAt == null;
             return new ConversationSummaryResponse(c.Id, peer.HasValue ? names.GetValueOrDefault(peer.Value) : c.Name,
                 c.Type, member.UnreadCount, c.CreatedAt, c.UpdatedAt, last?.Id, last?.CreatedAt,
                 peer.HasValue && blocked.Contains(peer.Value), peer,
                 last == null ? null : last.DeletedAt != null ? "Tin nhắn đã được thu hồi" :
-                    last.Type == MessageType.CallLog ? "Cuộc gọi" : !string.IsNullOrWhiteSpace(last.Content) ? last.Content :
+                    last.Type == MessageType.CallLog ? "Cuộc gọi" : !string.IsNullOrWhiteSpace(last.Content) ? _encryption.Decrypt(last.Content) :
                     last.VoiceDuration != null ? "Tin nhắn thoại" : last.MediaUrl != null ? "Media" : null,
                 active && member.Role is MemberRole.Admin or MemberRole.Owner, member.HiddenAt != null, member.LeftAt != null,
                 active ? member.Role : null, active && c.Type == ConversationType.Group ? GroupPermissionMatrix.Permissions(member.Role) : [],
-                active ? counts.GetValueOrDefault(c.Id) : 0, c.Version, c.ClosedAt, c.AvatarUrl);
+                active ? counts.GetValueOrDefault(c.Id) : 0, c.Version, c.ClosedAt, c.AvatarUrl, c.DefaultMessageTtlSeconds);
         }).ToList();
     }
 
@@ -171,5 +173,38 @@ public class ConversationService(AppDbContext db) : IConversationService
 
     public Task LeaveConversationAsync(Guid userId, Guid conversationId) =>
         new GroupService(db).RemoveAsync(userId, conversationId, userId, false);
+
+    public async Task SetDisappearingAsync(Guid userId, Guid conversationId, int? ttlSeconds)
+    {
+        if (ttlSeconds.HasValue && (ttlSeconds.Value < 0 || ttlSeconds.Value > 2592000))
+            throw AppException.BadRequest("TTL phải từ 0 đến 30 ngày.");
+
+        await using var tx = await db.Database.BeginTransactionAsync();
+        await ConversationLock.AcquireAsync(db, conversationId);
+
+        var member = await db.ConversationMembers.SingleOrDefaultAsync(m => m.ConversationId == conversationId && m.UserId == userId && m.LeftAt == null)
+            ?? throw AppException.Forbidden("Bạn không có quyền thao tác trên hội thoại này.");
+
+        var conv = await db.Conversations.SingleOrDefaultAsync(c => c.Id == conversationId && c.ClosedAt == null && c.DeletedAt == null)
+            ?? throw AppException.NotFound("Hội thoại không tồn tại.");
+
+        if (conv.Type == ConversationType.Group && !GroupPermissionMatrix.HasPermission(member.Role, "RenameGroup"))
+            throw AppException.Forbidden("Chỉ chủ nhóm hoặc quản trị viên mới có quyền đổi cài đặt tin nhắn tự hủy.");
+
+        var effectiveTtl = ttlSeconds is <= 0 ? null : ttlSeconds;
+        conv.DefaultMessageTtlSeconds = effectiveTtl;
+        conv.Version++;
+        conv.UpdatedAt = DateTime.UtcNow;
+
+        ConversationEvents.Add(db, conversationId, "DisappearingSettingsChanged", new
+        {
+            ConversationId = conversationId,
+            TtlSeconds = effectiveTtl,
+            Version = conv.Version
+        });
+
+        await db.SaveChangesAsync();
+        await tx.CommitAsync();
+    }
 }
 
