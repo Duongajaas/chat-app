@@ -980,6 +980,9 @@ namespace ChatApp.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("edited_at");
 
+                    b.Property<string>("ExpressionJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("expression_json");
                     b.Property<DateTime?>("ExpiresAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("expires_at");

@@ -34,6 +34,10 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
 builder.Services.AddMemoryCache();
+var expressionOptions = new ExpressionOptions();
+builder.Configuration.GetSection("Expressions").Bind(expressionOptions);
+if (!ExpressionCatalog.IsValid(expressionOptions)) throw new InvalidOperationException("Invalid sticker catalog configuration.");
+builder.Services.AddSingleton(new ExpressionCatalog(expressionOptions));
 builder.Services.AddSingleton<HubRateLimitFilter>();
 builder.Services.AddSingleton<SessionHubFilter>();
 builder.Services.AddSingleton<SessionConnectionMonitor>();

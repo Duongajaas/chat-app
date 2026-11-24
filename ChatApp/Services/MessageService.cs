@@ -10,7 +10,7 @@ using Npgsql;
 
 namespace ChatApp.Services;
 
-public class MessageService(AppDbContext db, IBlockService blocks, IMessageEncryptionService? encryption = null) : IMessageService
+public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCatalog? expressions = null, IMessageEncryptionService? encryption = null) : IMessageService
 {
     private readonly IMessageEncryptionService _encryption = encryption ?? AesGcmMessageEncryptionService.Default;
 
@@ -49,11 +49,19 @@ public class MessageService(AppDbContext db, IBlockService blocks, IMessageEncry
         if (clientMessageId == Guid.Empty) throw AppException.BadRequest("clientMessageId là bắt buộc.");
         if (request.Mentions?.Length > 20) throw AppException.BadRequest("Tối đa 20 vị trí mention.");
         var requestHash = MessageReconciliation.Hash(conversationId, request, sourceId);
+        ExpressionMedia? expression = null;
+        if (request.Expression != null)
+        {
+            if (sourceId != null || !string.IsNullOrEmpty(request.Content) || request.AssetId != null ||
+                request.MediaUrl != null || request.VoiceDuration != null || request.WaveformPoints != null || (request.Mentions?.Length ?? 0) != 0)
+                throw AppException.BadRequest("Sticker/GIF phải là một tin nhắn riêng.");
+            expression = (expressions ?? new ExpressionCatalog(new ExpressionOptions())).Normalize(request.Expression);
+        }
         var assetId = sourceId == null ? MediaValidation.AssetId(request.AssetId, request.MediaUrl) : null;
         if (sourceId == null)
         {
             if (request.Content?.Length > 4000) throw AppException.BadRequest("Tin nhắn tối đa 4000 ký tự.");
-            if (assetId == null)
+            if (assetId == null && expression == null)
             {
                 if (string.IsNullOrWhiteSpace(request.Content)) throw AppException.BadRequest("Tin nhắn cần nội dung hoặc media.");
                 if (request.VoiceDuration != null || request.WaveformPoints != null)
@@ -101,7 +109,7 @@ public class MessageService(AppDbContext db, IBlockService blocks, IMessageEncry
             if (source.Type == MessageType.CallLog) throw AppException.BadRequest("Không thể chuyển tiếp nhật ký cuộc gọi.");
             content = _encryption.Decrypt(source.Content ?? "");
         }
-        else if (string.IsNullOrWhiteSpace(content) && assetId == null)
+        else if (string.IsNullOrWhiteSpace(content) && assetId == null && expression == null)
             throw AppException.BadRequest("Tin nhắn cần nội dung hoặc media.");
         PrivateMediaAsset? asset = null;
         if (assetId.HasValue)
@@ -125,7 +133,9 @@ public class MessageService(AppDbContext db, IBlockService blocks, IMessageEncry
         var message = new Message { ConversationId = conversationId, SenderId = userId, ClientMessageId = clientMessageId,
             Content = encryptedContent, ReplyToMessageId = request.ReplyToMessageId, ForwardedFromMessageId = source?.Id,
             IsForwarded = source != null, RequestHash = requestHash,
-            Type = source?.Type ?? (request.VoiceDuration != null ? MessageType.Audio : asset != null ? MessageType.File : MessageType.Text),
+            Type = source?.Type ?? (expression?.Kind == "sticker" ? MessageType.Sticker : expression != null ? MessageType.Gif :
+                request.VoiceDuration != null ? MessageType.Audio : asset != null ? MessageType.File : MessageType.Text),
+            ExpressionJson = source?.ExpressionJson ?? (expression == null ? null : ExpressionCatalog.Serialize(expression)),
             MediaUrl = null,
             VoiceDuration = source?.VoiceDuration ?? request.VoiceDuration,
             WaveformPoints = source?.WaveformPoints ?? request.WaveformPoints,
@@ -317,15 +327,24 @@ public class MessageService(AppDbContext db, IBlockService blocks, IMessageEncry
         var status = isDeleted ? "Deleted" : isExpired ? "Expired" : "Sent";
         var rawContent = isDeleted ? "Tin nhắn đã được thu hồi" : isExpired ? "Tin nhắn đã tự hủy" : m.Content;
         var content = !isDeleted && !isExpired && rawContent != null ? enc.Decrypt(rawContent) : rawContent;
-        return new(m.Id, m.ConversationId, m.SenderId ?? Guid.Empty,
-            m.Sequence, content, m.ClientMessageId,
-            m.CreatedAt, m.EditedAt, status,
+        return new(
+            m.Id,
+            m.ConversationId,
+            m.SenderId ?? Guid.Empty,
+            m.Sequence,
+            content,
+            m.ClientMessageId,
+            m.CreatedAt,
+            m.EditedAt,
+            status,
             MediaUrl: null,
             VoiceDuration: !isDeleted && !isExpired ? m.VoiceDuration : null,
             WaveformPoints: !isDeleted && !isExpired ? m.WaveformPoints : null,
             Type: m.Type.ToString(),
+            Expression: !isDeleted && !isExpired ? ExpressionCatalog.Read(m.ExpressionJson) : null,
             ExpiresAt: m.ExpiresAt,
-            TtlSeconds: m.TtlSeconds);
+            TtlSeconds: m.TtlSeconds
+        );
     }
 }
 

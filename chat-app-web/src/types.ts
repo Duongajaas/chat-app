@@ -93,6 +93,7 @@ export interface Conversation {
 export interface PinnedMessage { id: string; pinnedBy?: string | null; createdAt: string; message: ChatMessage; }
 
 export interface ChatMessage {
+  expression?: ExpressionMedia | null;
   senderName?: string | null;
   senderUsername?: string | null;
   type?: string;
@@ -132,6 +133,18 @@ export interface MessageListResponse {
 
 export interface ConversationPage { items: Conversation[]; nextCursor: string | null; }
 
+export interface ExpressionInput { kind: "sticker" | "gif"; id: string; packId?: string | null; }
+export interface ExpressionMedia extends ExpressionInput {
+  provider: "local" | "giphy";
+  name: string;
+  url?: string | null;
+  thumbnailUrl?: string | null;
+  width: number;
+  height: number;
+  fileType?: string | null;
+  animated?: boolean;
+}
+export interface StickerPack { id: string; name: string; stickers: ExpressionMedia[]; }
 export type ReportTargetType = "User" | "Message" | "Conversation";
 export type ReportStatus = "Pending" | "Reviewing" | "Resolved" | "Dismissed";
 

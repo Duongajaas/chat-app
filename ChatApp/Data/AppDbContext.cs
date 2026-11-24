@@ -227,6 +227,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Message>(e =>
         {
             e.ToTable("messages");
+            e.Property(x => x.ExpressionJson).HasColumnType("jsonb");
             e.Property(x => x.Sequence).UseIdentityAlwaysColumn();
             e.HasIndex(x => new { x.SenderId, x.ClientMessageId }).IsUnique();
             e.HasIndex(x => new { x.ConversationId, x.Sequence });

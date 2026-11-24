@@ -64,6 +64,76 @@ public class RealtimeIntegrationTests(PostgresFixture fixture) : IClassFixture<P
             options.AccessTokenProvider = () => Task.FromResult<string?>(Token(user));
         }).Build();
     [Fact]
+    public async Task Expressions_send_realtime_to_two_accounts_and_survive_history_retry_and_recall()
+    {
+        var users = await Users();
+        Guid room;
+        await using (var db = fixture.Open())
+            room = (await new ConversationService(db).GetOrCreateDirectConversationAsync(users[0].Id, users[1].Id)).Id;
+        await using var app = Factory();
+        using var sender = Client(app, users[0]);
+        using var receiver = Client(app, users[1]);
+        using var outsider = Client(app, users[2]);
+        using var anonymous = Client(app);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/expressions/sticker-packs")).StatusCode);
+        var packs = await receiver.GetFromJsonAsync<StickerPack[]>("/api/expressions/sticker-packs", Json);
+        Assert.Contains(packs!, p => p.Stickers.Any(s => s.Id == "cat-happy"));
+
+        var received = Channel.CreateUnbounded<MessageResponse>();
+        var ownDevice = Channel.CreateUnbounded<MessageResponse>();
+        var deleted = Channel.CreateUnbounded<Guid>();
+        await using var receiverHub = Hub(app, users[1]);
+        await using var senderHub = Hub(app, users[0]);
+        receiverHub.On<MessageResponse>("ReceiveMessage", message => { received.Writer.TryWrite(message); });
+        senderHub.On<MessageResponse>("ReceiveMessage", message => { ownDevice.Writer.TryWrite(message); });
+        receiverHub.On<JsonElement>("MessageDeleted", message => { deleted.Writer.TryWrite(message.GetProperty("messageId").GetGuid()); });
+        await receiverHub.StartAsync(); await senderHub.StartAsync();
+        var sent = new List<MessageResponse>();
+        foreach (var expression in new ExpressionInput?[] { null, new("sticker", "cat-happy", "cats"), new("gif", "abc123") })
+        {
+            var payload = new SendMessagePayload(Guid.NewGuid(), expression == null ? "Xin chào 👩🏽‍💻❤️" : "", Expression: expression);
+            var first = await sender.PostAsJsonAsync($"/api/conversations/{room}/messages", payload);
+            first.EnsureSuccessStatusCode();
+            var message = (await first.Content.ReadFromJsonAsync<MessageResponse>(Json))!;
+            sent.Add(message);
+            Assert.Equal(message.Id, (await received.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(15))).Id);
+            Assert.Equal(message.Id, (await ownDevice.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(15))).Id);
+            var retry = await sender.PostAsJsonAsync($"/api/conversations/{room}/messages", payload);
+            retry.EnsureSuccessStatusCode();
+            Assert.Equal(message.Id, (await retry.Content.ReadFromJsonAsync<MessageResponse>(Json))!.Id);
+            var reconciled = await sender.PostAsJsonAsync($"/api/conversations/{room}/messages/reconcile", new { items = new[] { payload } });
+            reconciled.EnsureSuccessStatusCode();
+            Assert.Equal("Readable", (await reconciled.Content.ReadFromJsonAsync<MessageReceipt[]>(Json))!.Single().State);
+        }
+        var history = await receiver.GetFromJsonAsync<MessageListResponse>($"/api/conversations/{room}/messages", Json);
+        Assert.Equal(sent.Select(m => m.Id), history!.Messages.Select(m => m.Id));
+        Assert.Equal("Xin chào 👩🏽‍💻❤️", history.Messages[0].Content);
+        Assert.Equal("/stickers/cat-happy.svg", history.Messages[1].Expression!.Url);
+        Assert.Equal("Gif", history.Messages[2].Type);
+        Assert.Null(history.Messages[2].Expression!.Url);
+        var page = await receiver.GetFromJsonAsync<MessageListResponse>($"/api/conversations/{room}/messages?limit=1", Json);
+        Assert.True(page!.HasMore); Assert.Single(page.Messages);
+        var invalid = await sender.PostAsJsonAsync($"/api/conversations/{room}/messages",
+            new SendMessagePayload(Guid.NewGuid(), "", Expression: new("sticker", "not-in-catalog")));
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        var forbidden = await outsider.PostAsJsonAsync($"/api/conversations/{room}/messages",
+            new SendMessagePayload(Guid.NewGuid(), "", Expression: new("sticker", "cat-happy")));
+        Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+        (await sender.DeleteAsync($"/api/messages/{sent[2].Id}")).EnsureSuccessStatusCode();
+        Assert.Equal(sent[2].Id, await deleted.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(15)));
+        history = await receiver.GetFromJsonAsync<MessageListResponse>($"/api/conversations/{room}/messages", Json);
+        Assert.Null(history!.Messages.Single(m => m.Id == sent[2].Id).Expression);
+        Assert.Equal("Deleted", history.Messages.Single(m => m.Id == sent[2].Id).Status);
+        (await receiver.DeleteAsync($"/api/messages/{sent[1].Id}/for-me")).EnsureSuccessStatusCode();
+        history = await receiver.GetFromJsonAsync<MessageListResponse>($"/api/conversations/{room}/messages", Json);
+        Assert.DoesNotContain(history!.Messages, m => m.Id == sent[1].Id);
+        var senderHistory = await sender.GetFromJsonAsync<MessageListResponse>($"/api/conversations/{room}/messages", Json);
+        Assert.Contains(senderHistory!.Messages, m => m.Id == sent[1].Id);
+        await using var verify = fixture.Open();
+        Assert.Equal(3, await verify.Messages.CountAsync(m => m.ConversationId == room));
+    }
+
+    [Fact]
     public async Task Anonymous_upload_is_rejected_and_revoked_session_loses_http_and_hub_access()
     {
         var users = await Users();

@@ -107,7 +107,9 @@ public class ConversationService(AppDbContext db, IMessageEncryptionService? enc
                 c.Type, member.UnreadCount, c.CreatedAt, c.UpdatedAt, last?.Id, last?.CreatedAt,
                 peer.HasValue && blocked.Contains(peer.Value), peer,
                 last == null ? null : last.DeletedAt != null ? "Tin nhắn đã được thu hồi" :
-                    last.Type == MessageType.CallLog ? "Cuộc gọi" : !string.IsNullOrWhiteSpace(last.Content) ? _encryption.Decrypt(last.Content) :
+                    last.Type == MessageType.CallLog ? "Cuộc gọi" : last.Type == MessageType.Sticker ? "Sticker" :
+                    !string.IsNullOrWhiteSpace(last.Content) ? _encryption.Decrypt(last.Content) :
+                    last.Type == MessageType.Gif ? "GIF từ GIPHY" : !string.IsNullOrWhiteSpace(last.Content) ? last.Content : 
                     last.VoiceDuration != null ? "Tin nhắn thoại" : last.MediaUrl != null ? "Media" : null,
                 active && member.Role is MemberRole.Admin or MemberRole.Owner, member.HiddenAt != null, member.LeftAt != null,
                 active ? member.Role : null, active && c.Type == ConversationType.Group ? GroupPermissionMatrix.Permissions(member.Role) : [],

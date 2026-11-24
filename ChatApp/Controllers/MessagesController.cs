@@ -44,7 +44,7 @@ public class MessagesController : ControllerBase
 
         var clientMessageId = payload.ClientMessageId ?? Guid.Empty;
         var request = new SendMessageRequest(payload.Content, payload.ReplyToMessageId, payload.Mentions,
-            payload.MediaUrl, payload.VoiceDuration, payload.WaveformPoints, payload.AssetId, payload.TtlSeconds);
+            payload.MediaUrl, payload.VoiceDuration, payload.WaveformPoints, payload.AssetId, payload.Expression, payload.TtlSeconds);
         return Ok(await _messageService.SendMessageAsync(userId, clientMessageId, conversationId, request, HttpContext.RequestAborted));
     }
 
