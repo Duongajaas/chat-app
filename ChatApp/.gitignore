@@ -5,5 +5,5 @@ appsettings.Development.json
 .env
 .vs/
 .vscode/
-Migrations/
+# EF migration source files must accompany the model snapshot in a clone.
 Data/CallMigrations/

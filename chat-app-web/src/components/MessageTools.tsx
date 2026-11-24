@@ -103,7 +103,8 @@ export function ForwardMessage({ message, conversations, onClose }: { message: C
         if (!user) return;
         useChatStore.getState().appendMessage(target, { id: key, clientMessageId: key, conversationId: target,
           senderId: user.id, content: message.content, sequence: Number.MAX_VALUE, status: "Sending",
-          createdAt: new Date().toISOString(), pendingSourceMessageId: message.id, isForwarded: true });
+          createdAt: new Date().toISOString(), pendingSourceMessageId: message.id, isForwarded: true,
+          type: message.type, expression: message.expression });
         messageDelivery.enqueue({ accountId: user.id, session, conversationId: target,
           payload: { clientMessageId: key, sourceMessageId: message.id } });
         onClose();

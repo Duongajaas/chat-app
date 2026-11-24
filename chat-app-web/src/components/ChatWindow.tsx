@@ -12,11 +12,14 @@ import { ReplyingToBar } from "./ReplyingToBar";
 import { PinnedMessages, ForwardMessage } from "./MessageTools";
 import { getSessionVersion } from "../api/client";
 import { extractErrorMessage } from "../api/auth";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Component, Suspense, lazy, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { GroupSettings } from "./GroupSettings";
 import { Avatar } from "./Avatar";
-import { PhoneIcon, VideoIcon, SendIcon, PaperclipIcon, SmileIcon, MoreIcon, ReplyIcon, ForwardIcon, PinIcon, ArrowLeftIcon, CloseIcon, PlusCircleIcon } from "./icons";
-import type { Conversation, ChatMessage } from "../types";
+import { PhoneIcon, VideoIcon, SendIcon, PaperclipIcon, SmileIcon, MoreIcon, ReplyIcon, ForwardIcon, PinIcon, ArrowLeftIcon, CloseIcon } from "./icons";
+import type { Conversation, ChatMessage, ExpressionMedia } from "../types";
+import type { ExpressionTab } from "./ExpressionPicker";
+import { insertEmojiAtSelection } from "../utils/expressions";
+import { getGiphyMediaUrl } from "../utils/giphy";
 import { sendTyping, markConversationAsRead } from "../realtime/connection";
 import { usePresenceStore } from "../store/presenceStore";
 import { useChatStore } from "../store/chatStore";
@@ -24,12 +27,21 @@ import { useAuth } from "../context/AuthContext";
 import { useLoadOlderMessages } from "../hooks/useLoadOlderMessages";
 import { useAutoScrollToBottom } from "../hooks/useAutoScrollToBottom";
 
+const ExpressionPicker = lazy(() => import("./ExpressionPicker"));
+const ExpressionMessage = lazy(() => import("./GifMessage").then(module => ({ default: module.GifMessage })));
+
+class ExpressionBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  render() { return this.state.failed ? <span role="status">Không thể tải nội dung biểu cảm này.</span> : this.props.children; }
+}
+
 interface ChatWindowProps {
   conversation: Conversation | null;
   messages: ChatMessage[];
   onSendMessage: (content: string, features?: { replyToMessageId?: string; mentions?: MentionInput[];
     assetId?: string | null; mediaUrl?: string | null; voiceDuration?: number | null; waveformPoints?: string | null;
-    attachmentName?: string }) => void;
+    attachmentName?: string; expression?: ExpressionMedia }) => void;
   onDeleteMessage: (messageId: string) => Promise<void>;
   onDeleteForMe: (messageId: string) => Promise<void>;
   onRetryMessage: (message: ChatMessage) => void;
@@ -55,12 +67,19 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
     setMentioned(rows => rows?.filter(m => !unavailable(m)) ?? null);
   }, [deletedIds, hiddenIds, reply, forward, contextMessage]);
   const [showGroup, setShowGroup] = useState(false);
+  const [pickerTab, setPickerTab] = useState<ExpressionTab | null>(null);
+  const lastExpressionTrigger = useRef<HTMLButtonElement | null>(null);
+  const composerSelection = useRef({ start: 0, end: 0 });
+  const closeExpressionPicker = useCallback((restoreFocus = true) => {
+    setPickerTab(null);
+    if (restoreFocus) lastExpressionTrigger.current?.focus();
+  }, []);
   const [infoOpen, setInfoOpen] = useState<Record<string, boolean>>({});
   useEffect(() => {
     const id = conversation?.id;
     if (!id || !infoOpen[id]) return;
     const close = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !document.querySelector("dialog[open]")) {
+      if (e.key === "Escape" && !document.querySelector('dialog[open], #expression-picker')) {
         setInfoOpen(prev => ({ ...prev, [id]: false }));
         document.querySelector<HTMLButtonElement>('.chat-window__actions [aria-label="Thông tin hội thoại"]')?.focus();
       }
@@ -144,6 +163,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   useEffect(() => {
     setIsActionsMenuOpen(false);
     setHighlightedMessage(null); setShowGroup(false); setReply(null); setForward(null); setMentioned(null); setContextMessage(null);
+    setPickerTab(null);
   }, [conversation?.id]);
 
   useEffect(() => {
@@ -313,6 +333,27 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
     return !isBlocked && ((messageIsMine && withinWindow) || isAdmin);
   }
 
+  function handleEmojiSelect(emoji: string) {
+    const { start, end } = composerSelection.current;
+    const inserted = insertEmojiAtSelection(draft, emoji, start, end);
+    if (!inserted) { setActionError("Tin nhắn tối đa 4000 ký tự."); return false; }
+    handleDraftChange(inserted.value);
+    composerSelection.current = { start: inserted.caret, end: inserted.caret };
+    requestAnimationFrame(() => { composerInput.current?.focus(); composerInput.current?.setSelectionRange(inserted.caret, inserted.caret); });
+    return true;
+  }
+
+  function rememberComposerSelection() {
+    const input = composerInput.current;
+    if (input) composerSelection.current = { start: input.selectionStart ?? input.value.length, end: input.selectionEnd ?? input.value.length };
+  }
+
+  function handleSendExpression(media: ExpressionMedia) {
+    if (isBlocked || !user || activeConversation.current !== conversationId) return;
+    onSendMessage("", { expression: media, replyToMessageId: reply?.id });
+    setReply(null); setPickerTab(null); composerInput.current?.focus();
+  }
+
   async function deleteForEveryone(message: ChatMessage) {
     setDeletingMessageId(message.id);
     try {
@@ -414,7 +455,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
           // console.log("Rendering message", m.id, "isMine:", isMine, "content:", m.content, "userId:", m.senderId, "currentUserId:", user?.id);
           return (
           <div id={"message-" + m.id} key={m.id} className={`message-bubble-row ${isMine ? "is-me" : ""} ${highlightedMessage === m.id ? "message-reference-highlight" : ""}`}>
-            <div className={`message-bubble ${activeActionId === m.id || openMessageId === m.id ? "has-actions" : ""}`}
+            <div className={`message-bubble ${m.expression ? "message-bubble--expression" : ""} ${activeActionId === m.id || openMessageId === m.id ? "has-actions" : ""}`}
               tabIndex={actionable ? 0 : undefined} aria-label={actionable ? "Tin nhắn; nhấn Enter để mở thao tác" : undefined}
               onPointerDown={event => {
                 cancelLongPress(); pressed.current = false;
@@ -433,7 +474,9 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
               {(m.status === "Sending" || m.status === "Failed") && m.assetId && !m.attachments?.length &&
                 <small className="message-bubble__pending-media">{m.pendingAttachmentName ? `📎 ${m.pendingAttachmentName}` : "Ảnh"}</small>}
               {m.status === "Deleted" ? <p className="message-bubble__deleted">Tin nhắn đã được thu hồi</p> : <>
-                {m.type === "CallLog" ? <CallLogBubble content={m.content} isCaller={isMine} conversationId={conversation.id} disabled={isBlocked || callBusy || connectionStatus !== "connected"} /> : m.content && <p><MessageText content={m.content} mentions={m.mentions} /></p>}
+                {m.expression ? <ExpressionBoundary><Suspense fallback={<span role="status">Đang tải biểu cảm…</span>}><ExpressionMessage media={m.expression} /></Suspense></ExpressionBoundary>
+                  : getGiphyMediaUrl(m.content ?? "") ? <ExpressionBoundary><Suspense fallback={<span>Đang tải GIF…</span>}><ExpressionMessage url={getGiphyMediaUrl(m.content)!} /></Suspense></ExpressionBoundary>
+                  : m.type === "CallLog" ? <CallLogBubble content={m.content} isCaller={isMine} conversationId={conversation.id} disabled={isBlocked || callBusy || connectionStatus !== "connected"} /> : m.content && <p><MessageText content={m.content} mentions={m.mentions} /></p>}
                 {(m.type === "File" || m.type === "Audio") && !m.attachments?.length && <small>Media không khả dụng.</small>}
               </>}
               <span className="message-bubble__time">
@@ -484,12 +527,19 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
         {members.filter(m => m.userId !== user?.id && m.username?.toLowerCase().startsWith(draft.slice(draft.lastIndexOf("@") + 1).toLowerCase()))
           .slice(0, 6).map(m => <button key={m.userId} onClick={() => setDraft(draft.slice(0, draft.lastIndexOf("@")) + "@" + m.username + " ")}>@{m.username}</button>)}
       </div>}
+      {pickerTab && !isBlocked && user && <Suspense fallback={<p role="status">Đang mở bảng biểu cảm…</p>}>
+        <ExpressionPicker key={`${user.id}:${conversation.id}:${pickerTab}`} accountId={user.id} initialTab={pickerTab}
+          onEmoji={handleEmojiSelect} onSelect={handleSendExpression} onClose={closeExpressionPicker} />
+      </Suspense>}
       {isBlocked ? (
         <div className="chat-window__blocked-message">{conversation.type === "Group" ? "Bạn không còn quyền gửi tin trong nhóm này." : "Bạn không thể nhắn tin với người này."}</div>
       ) : (
         <form className="chat-window__composer" onSubmit={handleSubmit}>
           <div className="chat-window__composer-tools">
-          <button type="button" className="icon-btn" title="Emoji (sắp có)" aria-label="Emoji (sắp có)" disabled><SmileIcon /></button>
+          <button type="button" data-expression-trigger className={`icon-btn ${pickerTab ? "is-active" : ""}`}
+            onPointerDown={rememberComposerSelection}
+            title="Emoji, Sticker và GIF" aria-label="Mở bảng biểu cảm" aria-haspopup="dialog" aria-controls="expression-picker" aria-expanded={pickerTab !== null}
+            onClick={event => { lastExpressionTrigger.current = event.currentTarget; setPickerTab(current => current ? null : "emoji"); }}><SmileIcon /></button>
           <input ref={imageInput} type="file" accept={IMAGE_TYPES.join(",")} hidden aria-hidden="true" tabIndex={-1}
             onChange={e => { void handleAttachmentPicked(e.target.files?.[0], "image"); }} />
           <input ref={fileInput} type="file" accept={[...DOCUMENT_EXTENSIONS, ...IMAGE_TYPES].join(",")} hidden aria-hidden="true" tabIndex={-1}
@@ -503,9 +553,14 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
             aria-busy={uploading === "file"} disabled={uploading !== null} onClick={() => fileInput.current?.click()}>
             <PaperclipIcon />
           </button>
-          <button type="button" className="icon-btn" title="Thêm tiện ích (sắp có)" aria-label="Thêm tiện ích (sắp có)" disabled><PlusCircleIcon /></button>
+          <button type="button" className="icon-btn gif-button" data-expression-trigger aria-label="Gửi GIF" aria-haspopup="dialog"
+            onPointerDown={rememberComposerSelection}
+            aria-expanded={pickerTab === "gif"} onClick={event => { lastExpressionTrigger.current = event.currentTarget; setPickerTab(current => current === "gif" ? null : "gif"); }}>GIF</button>
           </div>
-          <input ref={composerInput} maxLength={4000} placeholder={`Nhắn tin tới ${conversation.name}`} value={draft} onChange={(e) => handleDraftChange(e.target.value)} />
+          <input ref={composerInput} maxLength={4000} placeholder={`Nhắn tin tới ${conversation.name}`} value={draft}
+            onBlur={rememberComposerSelection}
+            onSelect={event => { composerSelection.current = { start: event.currentTarget.selectionStart ?? draft.length, end: event.currentTarget.selectionEnd ?? draft.length }; }}
+            onChange={(e) => handleDraftChange(e.target.value)} />
           <button type="submit" aria-label="Gửi tin nhắn" className="icon-btn icon-btn--send" disabled={!draft.trim()}>
             <SendIcon />
           </button>

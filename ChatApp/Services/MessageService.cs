@@ -10,7 +10,7 @@ using Npgsql;
 
 namespace ChatApp.Services;
 
-public class MessageService(AppDbContext db, IBlockService blocks) : IMessageService
+public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCatalog? expressions = null) : IMessageService
 {
     public async Task<MessageListResponse> GetMessagesAsync(Guid userId, Guid conversationId, long? before = null,
         long? after = null, int limit = 50, CancellationToken ct = default)
@@ -47,11 +47,19 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
         if (clientMessageId == Guid.Empty) throw AppException.BadRequest("clientMessageId là bắt buộc.");
         if (request.Mentions?.Length > 20) throw AppException.BadRequest("Tối đa 20 vị trí mention.");
         var requestHash = MessageReconciliation.Hash(conversationId, request, sourceId);
+        ExpressionMedia? expression = null;
+        if (request.Expression != null)
+        {
+            if (sourceId != null || !string.IsNullOrEmpty(request.Content) || request.AssetId != null ||
+                request.MediaUrl != null || request.VoiceDuration != null || request.WaveformPoints != null || (request.Mentions?.Length ?? 0) != 0)
+                throw AppException.BadRequest("Sticker/GIF phải là một tin nhắn riêng.");
+            expression = (expressions ?? new ExpressionCatalog(new ExpressionOptions())).Normalize(request.Expression);
+        }
         var assetId = sourceId == null ? MediaValidation.AssetId(request.AssetId, request.MediaUrl) : null;
         if (sourceId == null)
         {
             if (request.Content?.Length > 4000) throw AppException.BadRequest("Tin nhắn tối đa 4000 ký tự.");
-            if (assetId == null)
+            if (assetId == null && expression == null)
             {
                 if (string.IsNullOrWhiteSpace(request.Content)) throw AppException.BadRequest("Tin nhắn cần nội dung hoặc media.");
                 if (request.VoiceDuration != null || request.WaveformPoints != null)
@@ -93,7 +101,7 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
             if (source.Type == MessageType.CallLog) throw AppException.BadRequest("Không thể chuyển tiếp nhật ký cuộc gọi.");
             content = source.Content ?? "";
         }
-        else if (string.IsNullOrWhiteSpace(content) && assetId == null)
+        else if (string.IsNullOrWhiteSpace(content) && assetId == null && expression == null)
             throw AppException.BadRequest("Tin nhắn cần nội dung hoặc media.");
         PrivateMediaAsset? asset = null;
         if (assetId.HasValue)
@@ -109,7 +117,9 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
         var message = new Message { ConversationId = conversationId, SenderId = userId, ClientMessageId = clientMessageId,
             Content = content, ReplyToMessageId = request.ReplyToMessageId, ForwardedFromMessageId = source?.Id,
             IsForwarded = source != null, RequestHash = requestHash,
-            Type = source?.Type ?? (request.VoiceDuration != null ? MessageType.Audio : asset != null ? MessageType.File : MessageType.Text),
+            Type = source?.Type ?? (expression?.Kind == "sticker" ? MessageType.Sticker : expression != null ? MessageType.Gif :
+                request.VoiceDuration != null ? MessageType.Audio : asset != null ? MessageType.File : MessageType.Text),
+            ExpressionJson = source?.ExpressionJson ?? (expression == null ? null : ExpressionCatalog.Serialize(expression)),
             MediaUrl = null,
             VoiceDuration = source?.VoiceDuration ?? request.VoiceDuration,
             WaveformPoints = source?.WaveformPoints ?? request.WaveformPoints };
@@ -294,6 +304,7 @@ public class MessageService(AppDbContext db, IBlockService blocks) : IMessageSer
         m.CreatedAt, m.EditedAt, m.DeletedAt == null ? "Sent" : "Deleted",
         MediaUrl: null,
         VoiceDuration: m.DeletedAt == null ? m.VoiceDuration : null,
-        WaveformPoints: m.DeletedAt == null ? m.WaveformPoints : null, Type: m.Type.ToString());
+        WaveformPoints: m.DeletedAt == null ? m.WaveformPoints : null, Type: m.Type.ToString(),
+        Expression: m.DeletedAt == null ? ExpressionCatalog.Read(m.ExpressionJson) : null);
 }
 

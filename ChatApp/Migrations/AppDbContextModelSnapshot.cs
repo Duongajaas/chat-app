@@ -976,6 +976,10 @@ namespace ChatApp.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("edited_at");
 
+                    b.Property<string>("ExpressionJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("expression_json");
+
                     b.Property<Guid?>("ForwardedFromMessageId")
                         .HasColumnType("uuid")
                         .HasColumnName("forwarded_from_message_id");

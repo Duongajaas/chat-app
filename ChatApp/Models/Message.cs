@@ -19,6 +19,7 @@ public class Message
     public int? VoiceDuration { get; set; } 
     public string? WaveformPoints { get; set; } 
     public string? MediaUrl { get; set; }
+    public string? ExpressionJson { get; set; }
 
     public Guid? ReplyToMessageId { get; set; }
     public Guid? ForwardedFromMessageId { get; set; }

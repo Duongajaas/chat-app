@@ -46,7 +46,8 @@ public record MessageResponse(
     string? WaveformPoints = null,
     string Type = "Text",
     string? SenderName = null,
-    string? SenderUsername = null
+    string? SenderUsername = null,
+    ExpressionMedia? Expression = null
 );
 
 public record MessageListResponse(
@@ -69,7 +70,8 @@ public record SendMessageRequest(
     string? MediaUrl = null,
     int? VoiceDuration = null,
     string? WaveformPoints = null,
-    Guid? AssetId = null
+    Guid? AssetId = null,
+    ExpressionInput? Expression = null
 );
 
 public record SendMessagePayload(
@@ -80,7 +82,8 @@ public record SendMessagePayload(
     string? MediaUrl = null,
     int? VoiceDuration = null,
     string? WaveformPoints = null,
-    Guid? AssetId = null
+    Guid? AssetId = null,
+    ExpressionInput? Expression = null
 );
 
 public record MessageStateResponse(Guid Id, bool Deleted, bool Hidden);

@@ -138,7 +138,8 @@ export default function ChatPage() {
   const activeMessages = activeConversationId ? messagesByConversation[activeConversationId] ?? [] : [];
 
   async function handleSend(content: string, retry?: ChatMessage, features?: { replyToMessageId?: string; mentions?: import("../utils/mentions").MentionInput[];
-    assetId?: string | null; mediaUrl?: string | null; voiceDuration?: number | null; waveformPoints?: string | null; attachmentName?: string }) {
+    assetId?: string | null; mediaUrl?: string | null; voiceDuration?: number | null; waveformPoints?: string | null; attachmentName?: string;
+    expression?: import("../types").ExpressionMedia }) {
     const id = retry?.conversationId ?? activeConversationId;
     if (!id || !user) return;
     const version = getSessionVersion();
@@ -148,10 +149,13 @@ export default function ChatPage() {
     const mediaUrl = retry?.mediaUrl ?? features?.mediaUrl;
     const voiceDuration = retry?.voiceDuration ?? features?.voiceDuration;
     const waveformPoints = retry?.waveformPoints ?? features?.waveformPoints;
+    const expression = retry?.expression ?? features?.expression;
+    const expressionInput = expression ? { kind: expression.kind, id: expression.id, packId: expression.packId } : undefined;
     const clientMessageId = retry?.clientMessageId ?? crypto.randomUUID();
     appendMessage(id, {
       id: clientMessageId, conversationId: id, senderId: user.id, sequence: Number.MAX_VALUE,
-      content, replyToMessageId, pendingMentions: mentions, assetId, mediaUrl, voiceDuration, waveformPoints,
+      content, replyToMessageId, pendingMentions: mentions, assetId, mediaUrl, voiceDuration, waveformPoints, expression,
+      type: expression?.kind === "sticker" ? "Sticker" : expression ? "Gif" : undefined,
       pendingAttachmentName: retry?.pendingAttachmentName ?? features?.attachmentName,
       pendingSourceMessageId: retry?.pendingSourceMessageId, createdAt: retry?.createdAt ?? new Date().toISOString(), clientMessageId, status: "Sending",
     });
@@ -159,7 +163,7 @@ export default function ChatPage() {
       messageDelivery.enqueue({ accountId: user.id, session: version, conversationId: id,
         payload: retry?.pendingSourceMessageId
           ? { clientMessageId, sourceMessageId: retry.pendingSourceMessageId }
-          : { clientMessageId, content, replyToMessageId, mentions, assetId, mediaUrl, voiceDuration, waveformPoints } }, !!retry);
+          : { clientMessageId, content, replyToMessageId, mentions, assetId, mediaUrl, voiceDuration, waveformPoints, expression: expressionInput } }, !!retry);
     } catch (error) {
       useChatStore.getState().updateMessage(id, clientMessageId, { status: "Failed",
         deliveryError: error instanceof Error ? error.message : "Không thể thêm tin vào hàng đợi." });

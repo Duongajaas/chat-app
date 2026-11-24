@@ -51,7 +51,7 @@ export const useChatStore = create<ChatState>((set) => ({
   })),
   deleteMessage: (conversationId, messageId) => set(state => ({
     deletedMessageIds: { ...state.deletedMessageIds, [messageId]: true },
-    messagesByConversation: { ...state.messagesByConversation, [conversationId]: (state.messagesByConversation[conversationId] ?? []).map(m => m.id === messageId ? { ...m, status: "Deleted", content: "Tin nhắn đã được thu hồi", mentions: [], attachments: [], replyPreview: null } :
+    messagesByConversation: { ...state.messagesByConversation, [conversationId]: (state.messagesByConversation[conversationId] ?? []).map(m => m.id === messageId ? { ...m, status: "Deleted", content: "Tin nhắn đã được thu hồi", mentions: [], attachments: [], replyPreview: null, expression: null } :
       m.replyPreview?.id === messageId ? { ...m, replyPreview: { id: messageId, senderName: null, contentSnippet: null, isAvailable: false } } : m) },
   })),
   failMessage: (conversationId, clientMessageId) => set(state => ({
@@ -153,7 +153,7 @@ export const useChatStore = create<ChatState>((set) => ({
 function mergeVisible(state: ChatState, existing: ChatMessage[], incoming: ChatMessage[]) {
   return mergeMessages(existing, incoming).filter(m => !state.hiddenMessageIds[m.id]).map(m => {
     if (state.deletedMessageIds[m.id]) return { ...m, status: "Deleted" as const,
-      content: "Tin nhắn đã được thu hồi", mentions: [], attachments: [], replyPreview: null, replyToMessageId: null };
+      content: "Tin nhắn đã được thu hồi", mentions: [], attachments: [], replyPreview: null, replyToMessageId: null, expression: null };
     if (m.replyToMessageId && (state.deletedMessageIds[m.replyToMessageId] || state.hiddenMessageIds[m.replyToMessageId]))
       return { ...m, replyPreview: { id: m.replyToMessageId, isAvailable: false, contentSnippet: null, senderName: null } };
     return m;

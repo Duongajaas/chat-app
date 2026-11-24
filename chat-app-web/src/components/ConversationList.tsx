@@ -1,5 +1,6 @@
-﻿import { CreateGroup } from "./CreateGroup";
+import { CreateGroup } from "./CreateGroup";
 import { useEffect, useRef, useState } from "react";
+import { getGiphyMediaUrl } from "../utils/giphy";
 import { Avatar } from "./Avatar";
 import { SearchIcon, MoreIcon } from "./icons";
 import type { Conversation } from "../types";
@@ -144,7 +145,7 @@ export function ConversationList({ conversations, activeId, onSelect, onAcceptRe
                 <time className="conversation-item__time" title={c.lastMessageAt}>{displayTime(c.lastMessageAt)}</time>
               </div>
               <div className="conversation-item__bottom">
-                <span className="conversation-item__preview">{c.lastMessage || "Bắt đầu cuộc trò chuyện"}</span>
+                <span className="conversation-item__preview">{getGiphyMediaUrl(c.lastMessage) ? "GIF từ GIPHY" : c.lastMessage || "Bắt đầu cuộc trò chuyện"}</span>
                 {c.unreadCount > 0 && <span className="unread-badge">{c.unreadCount}</span>}
               </div>
               {activeTab === "pending" && (
@@ -162,4 +163,3 @@ export function ConversationList({ conversations, activeId, onSelect, onAcceptRe
     </section>
   );
 }
-

@@ -10,6 +10,9 @@ namespace ChatApp.Services;
 public class MessageReconciliation(AppDbContext db)
 {
     public static string Hash(Guid conversationId, SendMessageRequest request, Guid? sourceId) =>
+        request.Expression != null ? GroupService.Hash(JsonSerializer.Serialize(new { conversationId, request.Content,
+            request.ReplyToMessageId, Mentions = request.Mentions ?? [], request.AssetId, request.MediaUrl,
+            request.VoiceDuration, request.WaveformPoints, request.Expression, sourceId })) :
         request.AssetId != null ? GroupService.Hash(JsonSerializer.Serialize(new { conversationId, request.Content,
             request.ReplyToMessageId, Mentions = request.Mentions ?? [], request.MediaUrl,
             request.VoiceDuration, request.WaveformPoints, request.AssetId, sourceId })) :
@@ -39,7 +42,7 @@ public class MessageReconciliation(AppDbContext db)
         return items.Select(item => {
             if (!existing.TryGetValue(item.ClientMessageId, out var message)) return new MessageReceipt(item.ClientMessageId, "NotFound");
             var request = new SendMessageRequest(item.Content, item.ReplyToMessageId, item.Mentions,
-                item.MediaUrl, item.VoiceDuration, item.WaveformPoints, item.AssetId);
+                item.MediaUrl, item.VoiceDuration, item.WaveformPoints, item.AssetId, item.Expression);
             var matches = message.RequestHash != null ? message.RequestHash == Hash(conversation, request, item.SourceMessageId)
                 : item.SourceMessageId == null && item.ReplyToMessageId == message.ReplyToMessageId && (item.Mentions?.Length ?? 0) == 0 && message.Content == item.Content?.Trim();
             if (message.ConversationId != conversation || !matches) return new MessageReceipt(item.ClientMessageId, "Conflict");

@@ -1,4 +1,5 @@
 export interface QueuePayload {
+  expression?: import("../types").ExpressionInput | null;
   clientMessageId: string;
   content?: string | null;
   replyToMessageId?: string | null;
