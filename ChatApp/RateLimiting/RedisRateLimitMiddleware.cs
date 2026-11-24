@@ -35,11 +35,13 @@ public sealed class RedisRateLimitMiddleware(RequestDelegate next, ILogger<Redis
             RateLimitPolicies.GoogleLogin => configured.GoogleLogin,
             RateLimitPolicies.ResolveFriendLink => configured.ResolveFriendLink,
             RateLimitPolicies.GetMessages => configured.GetMessages,
+            RateLimitPolicies.FriendRequest => configured.FriendRequest,
+            RateLimitPolicies.Report => configured.Report,
             _ => throw new InvalidOperationException("Unknown rate limit policy: " + policy)
         };
         var ip = context.Connection.RemoteIpAddress;
         var partition = "ip:" + (ip?.IsIPv4MappedToIPv6 == true ? ip.MapToIPv4().ToString() : ip?.ToString() ?? "unknown");
-        if ((policy is "chat-write" or "group-write" or "group-join" or "media-upload" or "media-read") && context.User.FindFirstValue(ClaimTypes.NameIdentifier) is string user)
+        if ((policy is "chat-write" or "group-write" or "group-join" or "media-upload" or "media-read" or RateLimitPolicies.FriendRequest or RateLimitPolicies.Report) && context.User.FindFirstValue(ClaimTypes.NameIdentifier) is string user)
             partition = "user:" + user;
 
         RateLimitDecision decision;
@@ -52,6 +54,9 @@ public sealed class RedisRateLimitMiddleware(RequestDelegate next, ILogger<Redis
                     30, TimeSpan.FromMinutes(1), context.RequestAborted);
             if (decision.Allowed && policy == "media-upload")
                 decision = await counter.AcquireAsync("media-upload-ip", "ip:" + (ip?.MapToIPv6().ToString() ?? "unknown"),
+                    30, TimeSpan.FromMinutes(1), context.RequestAborted);
+            if (decision.Allowed && policy == RateLimitPolicies.Report)
+                decision = await counter.AcquireAsync("report-ip", "ip:" + (ip?.MapToIPv6().ToString() ?? "unknown"),
                     30, TimeSpan.FromMinutes(1), context.RequestAborted);
         }
         catch (Exception ex) when (ex is RedisException or RedisTimeoutException)

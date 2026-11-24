@@ -68,6 +68,11 @@ export async function getValidAccessToken() {
 }
 
 apiClient.interceptors.response.use(ensureCurrent, async (error: AxiosError) => {
+  if (error.response?.status === 429) {
+    const headers = error.response.headers;
+    const retryAfter = headers ? (headers["retry-after"] || headers["Retry-After"]) : null;
+    window.dispatchEvent(new CustomEvent("api:rate-limited", { detail: { retryAfter: retryAfter ? Number(retryAfter) : 60 } }));
+  }
   const config = error.config as SessionConfig | undefined;
   if (!config || config.sessionVersion !== generation || error.response?.status !== 401 || config._retry)
     return Promise.reject(error);

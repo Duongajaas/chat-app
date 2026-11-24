@@ -18,6 +18,7 @@ let rebindPending = false;
 let ticking = false;
 let stopping = false;
 let lastHeartbeat = 0;
+let lastSnapshotSync = 0;
 let leaseDeadline = 0;
 let iceExpires = 0;
 let disconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -255,7 +256,14 @@ export async function syncCall(rebind = false) {
   try {
     if (pendingStart) { await reconcileStart(); return; }
     const current = state().call && alive(state().call!) ? state().call : null;
+
+    lastSnapshotSync = Date.now();
     const { data } = await apiClient.get<CallSnapshot | null>(current ? `/calls/${current.id}` : "/calls/active", { params: { endpointId: endpoint?.endpointId } });
+
+    // let data : any;
+    // if (current) {
+    //     data = await apiClient.get<CallSnapshot | null>(current ? `/calls/${current.id}` : "/calls/active", { params: { endpointId: endpoint?.endpointId } });
+    // }
     if (session !== getSessionVersion() || op !== operation) return;
     if (data && typeof data.id === "string") {
       if (shouldResume && data.ownsEndpoint && alive(data) && endpoint && !ending) {
@@ -291,12 +299,14 @@ async function tick() {
         pc?.setConfiguration({ iceServers: ice.iceServers }); iceExpires = Date.parse(ice.expiresAt); await restart();
       }
     }
-    await syncCall();
+    const snapshotInterval = call && alive(call) ? 5000 : 10000;
+    if (Date.now() - lastSnapshotSync >= snapshotInterval) await syncCall();
   } catch { /* A later tick retries even without browser events. */ }
   finally { ticking = false; }
 }
 export function mountCalls() {
   stopping = false;
+  lastSnapshotSync = 0;
   const timer = setInterval(() => { void tick(); }, 3000);
   const reconnect = () => { void syncCall(true); };
   const visible = () => { if (document.visibilityState === "visible") void tick(); };

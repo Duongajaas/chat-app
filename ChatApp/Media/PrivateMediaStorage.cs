@@ -74,7 +74,7 @@ public sealed class PrivateMediaStorage(HttpClient http, IOptions<CloudinaryOpti
 public static class MediaValidation
 {
     public const int MaxBytes = 8 * 1024 * 1024;
-    private const string Unsupported = "Chỉ hỗ trợ ảnh (JPEG, PNG, WebP), âm thanh (WebM, Ogg, WAV), PDF, Word, Excel, PowerPoint, ZIP và văn bản (TXT, CSV, MD).";
+    private const string Unsupported = "Chỉ hỗ trợ ảnh (JPEG, PNG, WebP), âm thanh (WebM, Ogg, WAV, M4A), PDF, Word, Excel, PowerPoint, ZIP và văn bản (TXT, CSV, MD).";
 
     // Container formats are ambiguous by signature alone, so the extension picks the type;
     // a signature/extension mismatch (e.g. a .jar or .msi) is rejected.
@@ -118,6 +118,9 @@ public static class MediaValidation
             return ZipTypes.TryGetValue(extension, out var zipType) ? zipType : throw AppException.BadRequest(Unsupported);
         if (bytes.StartsWith(new byte[] { 0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1 }))
             return OleTypes.TryGetValue(extension, out var oleType) ? oleType : throw AppException.BadRequest(Unsupported);
+        // Safari records voice messages as MPEG-4 audio; accept the ISO base media signature only for .m4a names.
+        if (bytes.Slice(4, 4).SequenceEqual("ftyp"u8) && string.Equals(extension, ".m4a", StringComparison.OrdinalIgnoreCase))
+            return "audio/mp4";
         return DetectMedia(bytes, Unsupported);
     }
 

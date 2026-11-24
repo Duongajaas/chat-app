@@ -6,8 +6,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ChatApp.Services;
 
-public class MessageReader(AppDbContext db)
+public class MessageReader(AppDbContext db, IMessageEncryptionService? encryption = null)
 {
+    private readonly IMessageEncryptionService _encryption = encryption ?? AesGcmMessageEncryptionService.Default;
     public async Task EnsureMembershipAsync(Guid user, Guid conversation, CancellationToken ct = default)
     {
         if (!await db.ConversationMembers.AnyAsync(m => m.UserId == user && m.ConversationId == conversation, ct))
@@ -16,6 +17,7 @@ public class MessageReader(AppDbContext db)
 
     public IQueryable<Message> Visible(Guid user, Guid conversation) =>
         MessageVisibility.Readable(db, user, conversation).Where(m =>
+            (m.ExpiresAt == null || m.ExpiresAt > DateTime.UtcNow) &&
             !db.MessageDeletions.Any(d => d.MessageId == m.Id && d.UserId == user));
 
     public async Task<List<MessageResponse>> ReadAsync(Guid user, Guid conversation, Guid[] ids, CancellationToken ct = default)
@@ -43,12 +45,15 @@ public class MessageReader(AppDbContext db)
             if (m.DeletedAt == null && m.ReplyToMessageId is Guid replyId)
             {
                 var original = originals.GetValueOrDefault(replyId);
+                var isExpired = original?.ExpiresAt != null && original.ExpiresAt <= DateTime.UtcNow;
+                var decOriginalContent = original != null ? _encryption.Decrypt(original.Content) : null;
                 reply = original == null ? new(replyId, null, null, false) :
+                    isExpired ? new(replyId, null, "Tin nhắn gốc đã hết hạn", false) :
                     new(replyId, original.SenderId is Guid sender ? senders.GetValueOrDefault(sender)?.FullName : null,
-                        original.Type == MessageType.CallLog ? "Cuộc gọi" : original.Type == MessageType.Sticker ? "Sticker" :
+                        original.Type == MessageType.CallLog ? "Cuộc gọi" : original.Type == MessageType.Sticker ? "Sticker" : decOriginalContent is { Length: > 80 } text ? text[..80] + "…" : decOriginalContent, true, original.Sequence) :
                         original.Type == MessageType.Gif ? "GIF từ GIPHY" : original.Content is { Length: > 80 } text ? text[..80] + "…" : original.Content, true, original.Sequence);
             }
-            return MessageService.ToResponse(m) with {
+            return MessageService.ToResponse(m, _encryption) with {
                 SenderName = m.SenderId is Guid author ? senders.GetValueOrDefault(author)?.FullName : null,
                 SenderUsername = m.SenderId is Guid authorId ? senders.GetValueOrDefault(authorId)?.Username : null,
                 ReplyToMessageId = m.DeletedAt == null ? m.ReplyToMessageId : null,

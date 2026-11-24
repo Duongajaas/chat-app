@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using ChatApp.Common;
 using ChatApp.Data;
 using ChatApp.DTOs;
@@ -10,8 +10,10 @@ using Npgsql;
 
 namespace ChatApp.Services;
 
-public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCatalog? expressions = null) : IMessageService
+public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCatalog? expressions = null, IMessageEncryptionService? encryption = null) : IMessageService
 {
+    private readonly IMessageEncryptionService _encryption = encryption ?? AesGcmMessageEncryptionService.Default;
+
     public async Task<MessageListResponse> GetMessagesAsync(Guid userId, Guid conversationId, long? before = null,
         long? after = null, int limit = 50, CancellationToken ct = default)
     {
@@ -31,7 +33,7 @@ public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCat
         var peerRead = await db.ConversationMembers.Where(m => m.ConversationId == conversationId && m.UserId != userId)
             .Select(m => (long?)m.LastReadSequence).MaxAsync(ct) ?? 0;
         if (!await db.DirectConversations.AnyAsync(d => d.ConversationId == conversationId, ct)) peerRead = 0;
-        return new MessageListResponse(await new MessageReader(db).BuildAsync(userId, conversationId, page, ct), cursor, more, peerRead);
+        return new MessageListResponse(await new MessageReader(db, _encryption).BuildAsync(userId, conversationId, page, ct), cursor, more, peerRead);
     }
 
     public Task<MessageResponse> SendMessageAsync(Guid userId, Guid clientMessageId, Guid conversationId,
@@ -83,6 +85,12 @@ public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCat
             return await new MessageReconciliation(db).ExistingResponseAsync(userId, existing, ct);
         }
         await ActiveMemberAsync(userId, conversationId, ct);
+        var senderUser = await db.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Id == userId, ct);
+        if (senderUser?.RestrictedUntil != null && senderUser.RestrictedUntil > DateTime.UtcNow)
+        {
+            var remaining = (int)Math.Ceiling((senderUser.RestrictedUntil.Value - DateTime.UtcNow).TotalMinutes);
+            throw AppException.Forbidden($"Tài khoản của bạn đang bị hạn chế gửi tin nhắn. Vui lòng thử lại sau {remaining} phút.");
+        }
         var direct = await db.DirectConversations.SingleOrDefaultAsync(d => d.ConversationId == conversationId, ct);
         if (direct != null && await blocks.IsBlockedEitherWayAsync(direct.UserLowId, direct.UserHighId))
             throw AppException.Forbidden("Không thể gửi tin nhắn.");
@@ -91,15 +99,15 @@ public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCat
         if (sourceId != null)
         {
             if (sourceConversation == null) throw AppException.NotFound("Tin nhắn nguồn không khả dụng.");
-            await new MessageReader(db).EnsureMembershipAsync(userId, sourceConversation.Value, ct);
-            source = await new MessageReader(db).Visible(userId, sourceConversation.Value)
+            await new MessageReader(db, _encryption).EnsureMembershipAsync(userId, sourceConversation.Value, ct);
+            source = await new MessageReader(db, _encryption).Visible(userId, sourceConversation.Value)
                 .SingleOrDefaultAsync(m => m.Id == sourceId && m.DeletedAt == null, ct)
                 ?? throw AppException.NotFound("Tin nhắn nguồn không khả dụng.");
             var sourceDirect = await db.DirectConversations.SingleOrDefaultAsync(d => d.ConversationId == sourceConversation, ct);
             if (sourceDirect != null && await blocks.IsBlockedEitherWayAsync(sourceDirect.UserLowId, sourceDirect.UserHighId))
                 throw AppException.Forbidden("Không thể chuyển tiếp từ hội thoại bị chặn.");
             if (source.Type == MessageType.CallLog) throw AppException.BadRequest("Không thể chuyển tiếp nhật ký cuộc gọi.");
-            content = source.Content ?? "";
+            content = _encryption.Decrypt(source.Content ?? "");
         }
         else if (string.IsNullOrWhiteSpace(content) && assetId == null && expression == null)
             throw AppException.BadRequest("Tin nhắn cần nội dung hoặc media.");
@@ -112,22 +120,32 @@ public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCat
                 throw AppException.BadRequest("Tin nhắn thoại cần file âm thanh.");
         }
         if (request.ReplyToMessageId is Guid replyId &&
-            !await new MessageReader(db).Visible(userId, conversationId).AnyAsync(m => m.Id == replyId && m.DeletedAt == null, ct))
+            !await new MessageReader(db, _encryption).Visible(userId, conversationId).AnyAsync(m => m.Id == replyId && m.DeletedAt == null, ct))
             throw AppException.BadRequest("Tin nhắn được trả lời không khả dụng trong hội thoại.");
+
+        if (request.TtlSeconds is <= 0 or > 2592000)
+            throw AppException.BadRequest("TTL phải từ 1 giây đến 30 ngày.");
+        var conv = await db.Conversations.AsNoTracking().SingleOrDefaultAsync(c => c.Id == conversationId, ct);
+        var effectiveTtl = request.TtlSeconds ?? conv?.DefaultMessageTtlSeconds;
+        DateTime? expiresAt = effectiveTtl.HasValue && effectiveTtl.Value > 0 ? DateTime.UtcNow.AddSeconds(effectiveTtl.Value) : null;
+
+        var encryptedContent = _encryption.Encrypt(content);
         var message = new Message { ConversationId = conversationId, SenderId = userId, ClientMessageId = clientMessageId,
-            Content = content, ReplyToMessageId = request.ReplyToMessageId, ForwardedFromMessageId = source?.Id,
+            Content = encryptedContent, ReplyToMessageId = request.ReplyToMessageId, ForwardedFromMessageId = source?.Id,
             IsForwarded = source != null, RequestHash = requestHash,
             Type = source?.Type ?? (expression?.Kind == "sticker" ? MessageType.Sticker : expression != null ? MessageType.Gif :
                 request.VoiceDuration != null ? MessageType.Audio : asset != null ? MessageType.File : MessageType.Text),
             ExpressionJson = source?.ExpressionJson ?? (expression == null ? null : ExpressionCatalog.Serialize(expression)),
             MediaUrl = null,
             VoiceDuration = source?.VoiceDuration ?? request.VoiceDuration,
-            WaveformPoints = source?.WaveformPoints ?? request.WaveformPoints };
+            WaveformPoints = source?.WaveformPoints ?? request.WaveformPoints,
+            TtlSeconds = effectiveTtl,
+            ExpiresAt = expiresAt };
         db.Messages.Add(message);
         if (asset != null) db.MessageAttachments.Add(new MessageAttachment { MessageId = message.Id,
             StorageKey = asset.StorageKey, FileName = asset.FileName, FileType = asset.ContentType,
             FileSize = asset.Length, DurationSeconds = request.VoiceDuration });
-        if (source == null) await AddMentionsAsync(message, request.Mentions ?? [], ct);
+        if (source == null) await AddMentionsAsync(message, request.Mentions ?? [], content, ct);
         if (source != null)
         {
             var attachments = await db.MessageAttachments.AsNoTracking().Where(a => a.MessageId == source.Id &&
@@ -157,7 +175,7 @@ public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCat
         // Plain messages retain the compatible event; richer messages contain no shared quote/attachment payload.
         if (message.ReplyToMessageId != null || message.IsForwarded || asset != null || (request.Mentions?.Length ?? 0) > 0)
             ConversationEvents.Add(db, conversationId, "MessageAvailable", new { ConversationId = conversationId, MessageId = message.Id, message.Sequence });
-        else ConversationEvents.Add(db, conversationId, "ReceiveMessage", ToResponse(message));
+        else ConversationEvents.Add(db, conversationId, "ReceiveMessage", ToResponse(message, _encryption));
         var mentions = await db.MessageMentions.Where(m => m.MessageId == message.Id).ToListAsync(ct);
         foreach (var mention in mentions)
         {
@@ -171,7 +189,7 @@ public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCat
         return await new MessageReconciliation(db).ExistingResponseAsync(userId, message, ct);
     }
 
-    private async Task AddMentionsAsync(Message message, MentionInput[] inputs, CancellationToken ct)
+    private async Task AddMentionsAsync(Message message, MentionInput[] inputs, string plaintext, CancellationToken ct)
     {
         if (inputs.Length == 0) return;
         if (!await db.Conversations.AnyAsync(c => c.Id == message.ConversationId && c.Type == ConversationType.Group, ct))
@@ -184,11 +202,11 @@ public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCat
         foreach (var input in inputs.OrderBy(i => i.Start))
         {
             if (input.Start < end || input.Start < 0 || input.Length < 2 ||
-                input.Start > message.Content!.Length - input.Length)
+                input.Start > plaintext.Length - input.Length)
                 throw AppException.BadRequest("Vị trí mention không hợp lệ.");
             end = input.Start + input.Length;
             if (input.UserId == message.SenderId || !users.TryGetValue(input.UserId, out var target)) continue;
-            if (!string.Equals(message.Content.Substring(input.Start, input.Length), "@" + target.Username, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(plaintext.Substring(input.Start, input.Length), "@" + target.Username, StringComparison.OrdinalIgnoreCase))
                 throw AppException.BadRequest("Mention không khớp username.");
             if (!seen.Add(input.UserId)) continue;
             if (seen.Count > 10) throw AppException.BadRequest("Tối đa 10 người được mention trong một tin.");
@@ -197,10 +215,11 @@ public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCat
         }
     }
 
-    private static void CheckRetry(Message message, Guid conversation, string hash, string? content, Guid? source)
+    private void CheckRetry(Message message, Guid conversation, string hash, string? content, Guid? source)
     {
+        var decrypted = _encryption.Decrypt(message.Content);
         if (message.ConversationId != conversation || (message.RequestHash != null ? message.RequestHash != hash :
-            source != null || message.Content != content?.Trim()))
+            source != null || decrypted != content?.Trim()))
             throw AppException.Conflict("clientMessageId đã dùng cho yêu cầu khác.");
     }
 
@@ -282,11 +301,12 @@ public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCat
     private IQueryable<Message> VisibleMessages(ConversationMember member)
     {
         return MessageVisibility.Readable(db, member.UserId, member.ConversationId)
-            .Where(m => !db.MessageDeletions.Any(d => d.MessageId == m.Id && d.UserId == member.UserId));
+            .Where(m => (m.ExpiresAt == null || m.ExpiresAt > DateTime.UtcNow) &&
+                        !db.MessageDeletions.Any(d => d.MessageId == m.Id && d.UserId == member.UserId));
     }
 
     private Task<int> UnreadAsync(ConversationMember member, CancellationToken ct) =>
-        VisibleMessages(member).CountAsync(m => m.Sequence > member.LastReadSequence && m.SenderId != member.UserId && m.DeletedAt == null, ct);
+        VisibleMessages(member).CountAsync(m => m.Sequence > member.LastReadSequence && m.SenderId != member.UserId && m.DeletedAt == null && (m.ExpiresAt == null || m.ExpiresAt > DateTime.UtcNow), ct);
 
     private async Task<ConversationMember> ReadableMemberAsync(Guid userId, Guid id, CancellationToken ct) =>
         await db.ConversationMembers.SingleOrDefaultAsync(m => m.UserId == userId && m.ConversationId == id, ct)
@@ -299,12 +319,32 @@ public class MessageService(AppDbContext db, IBlockService blocks, ExpressionCat
         return member;
     }
 
-    public static MessageResponse ToResponse(Message m) => new(m.Id, m.ConversationId, m.SenderId ?? Guid.Empty,
-        m.Sequence, m.DeletedAt == null ? m.Content : "Tin nhắn đã được thu hồi", m.ClientMessageId,
-        m.CreatedAt, m.EditedAt, m.DeletedAt == null ? "Sent" : "Deleted",
-        MediaUrl: null,
-        VoiceDuration: m.DeletedAt == null ? m.VoiceDuration : null,
-        WaveformPoints: m.DeletedAt == null ? m.WaveformPoints : null, Type: m.Type.ToString(),
-        Expression: m.DeletedAt == null ? ExpressionCatalog.Read(m.ExpressionJson) : null);
+    public static MessageResponse ToResponse(Message m, IMessageEncryptionService? encryption = null)
+    {
+        var enc = encryption ?? AesGcmMessageEncryptionService.Default;
+        var isExpired = m.ExpiresAt != null && m.ExpiresAt <= DateTime.UtcNow;
+        var isDeleted = m.DeletedAt != null;
+        var status = isDeleted ? "Deleted" : isExpired ? "Expired" : "Sent";
+        var rawContent = isDeleted ? "Tin nhắn đã được thu hồi" : isExpired ? "Tin nhắn đã tự hủy" : m.Content;
+        var content = !isDeleted && !isExpired && rawContent != null ? enc.Decrypt(rawContent) : rawContent;
+        return new(
+            m.Id,
+            m.ConversationId,
+            m.SenderId ?? Guid.Empty,
+            m.Sequence,
+            content,
+            m.ClientMessageId,
+            m.CreatedAt,
+            m.EditedAt,
+            status,
+            MediaUrl: null,
+            VoiceDuration: !isDeleted && !isExpired ? m.VoiceDuration : null,
+            WaveformPoints: !isDeleted && !isExpired ? m.WaveformPoints : null,
+            Type: m.Type.ToString(),
+            Expression: !isDeleted && !isExpired ? ExpressionCatalog.Read(m.ExpressionJson) : null,
+            ExpiresAt: m.ExpiresAt,
+            TtlSeconds: m.TtlSeconds
+        );
+    }
 }
 

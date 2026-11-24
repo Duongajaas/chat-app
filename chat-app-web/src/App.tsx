@@ -15,6 +15,7 @@ import BlockedUsersPage from "./pages/BlockedUsersPage";
 import FriendLinkPage from "./pages/FriendLinkPage";
 import AddFriendPage from "./pages/AddFriendPage";
 import FriendsPage from "./pages/FriendsPage";
+import ModerationPage from "./pages/ModerationPage";
 
 export default function App() {
   return (
@@ -35,6 +36,7 @@ export default function App() {
           <Route path="/friend-link" element={<ProtectedRoute><FriendLinkPage /></ProtectedRoute>} />
           <Route path="/add-friend/:token" element={<ProtectedRoute><AddFriendPage /></ProtectedRoute>} />
           <Route path="/friends" element={<ProtectedRoute><FriendsPage /></ProtectedRoute>} />
+          <Route path="/moderation" element={<ProtectedRoute><ModerationPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>

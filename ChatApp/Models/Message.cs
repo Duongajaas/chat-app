@@ -28,6 +28,9 @@ public class Message
     public string? RequestHash { get; set; }
     public MessageStatus Status { get; set; } = MessageStatus.Sent;
 
+    public int? TtlSeconds { get; set; }
+    public DateTime? ExpiresAt { get; set; }
+
     public DateTime? EditedAt { get; set; }
     public DateTime? DeletedAt { get; set; }
 

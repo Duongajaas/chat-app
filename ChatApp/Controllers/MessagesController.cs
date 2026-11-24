@@ -44,7 +44,7 @@ public class MessagesController : ControllerBase
 
         var clientMessageId = payload.ClientMessageId ?? Guid.Empty;
         var request = new SendMessageRequest(payload.Content, payload.ReplyToMessageId, payload.Mentions,
-            payload.MediaUrl, payload.VoiceDuration, payload.WaveformPoints, payload.AssetId, payload.Expression);
+            payload.MediaUrl, payload.VoiceDuration, payload.WaveformPoints, payload.AssetId, payload.Expression, payload.TtlSeconds);
         return Ok(await _messageService.SendMessageAsync(userId, clientMessageId, conversationId, request, HttpContext.RequestAborted));
     }
 
@@ -53,7 +53,7 @@ public class MessagesController : ControllerBase
         Ok(await _messageService.ForwardAsync(Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!),
             messageId, request.TargetConversationId, request.ClientMessageId, HttpContext.RequestAborted));
 
-    [HttpDelete("api/messages/{messageId:guid}")]
+    [HttpDelete("api/messages/{messageId:guid}"), EnableRateLimiting("chat-write")]
     public async Task<IActionResult> Delete(Guid messageId)
     {
         var rawUserId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
@@ -64,7 +64,7 @@ public class MessagesController : ControllerBase
         return NoContent();
     }
 
-    [HttpDelete("api/messages/{messageId:guid}/for-me")]
+    [HttpDelete("api/messages/{messageId:guid}/for-me"), EnableRateLimiting("chat-write")]
     public async Task<IActionResult> DeleteForMe(Guid messageId)
     {
         await _messageService.DeleteForMeAsync(Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!), messageId, HttpContext.RequestAborted);

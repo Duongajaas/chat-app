@@ -32,7 +32,7 @@ public class ConversationsController : ControllerBase
         return Ok(await _conversationService.GetConversationByIdAsync(CurrentUserId, conversationId));
     }
 
-    [HttpPost("direct")]
+    [HttpPost("direct"), EnableRateLimiting("chat-write")]
     public async Task<ActionResult<ConversationSummaryResponse>> CreateDirect(CreateDirectConversationRequest request)
     {
         return Ok(await _conversationService.GetOrCreateDirectConversationAsync(CurrentUserId, request.OtherUserId));
@@ -50,6 +50,7 @@ public class ConversationsController : ControllerBase
 
     [HttpPost("{conversationId:guid}/hide")]
     [HttpDelete("{conversationId:guid}")]
+    [EnableRateLimiting("chat-write")]
     public async Task<IActionResult> Delete(Guid conversationId)
     {
         await _conversationService.DeleteConversationAsync(CurrentUserId, conversationId);
@@ -60,6 +61,13 @@ public class ConversationsController : ControllerBase
     public async Task<IActionResult> Leave(Guid conversationId)
     {
         await _conversationService.LeaveConversationAsync(CurrentUserId, conversationId);
+        return NoContent();
+    }
+
+    [HttpPut("{conversationId:guid}/disappearing"), EnableRateLimiting("chat-write")]
+    public async Task<IActionResult> SetDisappearing(Guid conversationId, [FromBody] SetDisappearingMessagesRequest request)
+    {
+        await _conversationService.SetDisappearingAsync(CurrentUserId, conversationId, request.TtlSeconds);
         return NoContent();
     }
 

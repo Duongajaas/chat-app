@@ -459,6 +459,10 @@ namespace ChatApp.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("created_by");
 
+                    b.Property<int?>("DefaultMessageTtlSeconds")
+                        .HasColumnType("integer")
+                        .HasColumnName("default_message_ttl_seconds");
+
                     b.Property<DateTime?>("DeletedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at");
@@ -979,6 +983,9 @@ namespace ChatApp.Migrations
                     b.Property<string>("ExpressionJson")
                         .HasColumnType("jsonb")
                         .HasColumnName("expression_json");
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
 
                     b.Property<Guid?>("ForwardedFromMessageId")
                         .HasColumnType("uuid")
@@ -1015,6 +1022,10 @@ namespace ChatApp.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("status");
 
+                    b.Property<int?>("TtlSeconds")
+                        .HasColumnType("integer")
+                        .HasColumnName("ttl_seconds");
+
                     b.Property<int>("Type")
                         .HasColumnType("integer")
                         .HasColumnName("type");
@@ -1036,6 +1047,9 @@ namespace ChatApp.Migrations
 
                     b.HasIndex("DeletedAt")
                         .HasDatabaseName("ix_messages_deleted_at");
+
+                    b.HasIndex("ExpiresAt")
+                        .HasDatabaseName("ix_messages_expires_at");
 
                     b.HasIndex("ForwardedFromMessageId")
                         .HasDatabaseName("ix_messages_forwarded_from_message_id");
@@ -1817,6 +1831,10 @@ namespace ChatApp.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("is_active");
 
+                    b.Property<bool>("IsFlagged")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_flagged");
+
                     b.Property<bool>("IsVerified")
                         .HasColumnType("boolean")
                         .HasColumnName("is_verified");
@@ -1836,6 +1854,14 @@ namespace ChatApp.Migrations
                     b.Property<string>("Phone")
                         .HasColumnType("text")
                         .HasColumnName("phone");
+
+                    b.Property<DateTime?>("RestrictedUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("restricted_until");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("integer")
+                        .HasColumnName("role");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")

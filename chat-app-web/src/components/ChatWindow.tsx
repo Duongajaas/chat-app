@@ -4,7 +4,10 @@ import { startCall } from "../realtime/callManager";
 import { useCallStore } from "../store/callStore";
 import { messagesApi } from "../api/messages";
 import { uploadMedia } from "../api/files";
-import { DOCUMENT_EXTENSIONS, IMAGE_TYPES, isAllowedDocument, isImageType } from "../utils/attachments";
+import { DOCUMENT_EXTENSIONS, IMAGE_TYPES, describeBatchFailures, planAttachmentBatch, type RejectedFile } from "../utils/attachments";
+import axios from "axios";
+import { VoiceError, VoiceRecorder, canRecordVoice, describeVoiceError } from "../realtime/voiceRecorder";
+import { MAX_VOICE_SECONDS, formatDuration } from "../utils/voice";
 import { groupsApi, type GroupMember } from "../api/groups";
 import { collectMentions, prependReplyMention, type MentionInput } from "../utils/mentions";
 import { MessageText } from "./MessageText";
@@ -14,9 +17,10 @@ import { getSessionVersion } from "../api/client";
 import { extractErrorMessage } from "../api/auth";
 import { Component, Suspense, lazy, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { GroupSettings } from "./GroupSettings";
+import { ReportDialog } from "./ReportDialog";
 import { Avatar } from "./Avatar";
-import { PhoneIcon, VideoIcon, SendIcon, PaperclipIcon, SmileIcon, MoreIcon, ReplyIcon, ForwardIcon, PinIcon, ArrowLeftIcon, CloseIcon } from "./icons";
-import type { Conversation, ChatMessage, ExpressionMedia } from "../types";
+import { PhoneIcon, VideoIcon, SendIcon, PaperclipIcon, SmileIcon, MoreIcon, ReplyIcon, ForwardIcon, PinIcon, ArrowLeftIcon, CloseIcon, PlusCircleIcon, MicIcon, TrashIcon } from "./icons";
+import type { Conversation, ChatMessage, ReportTargetType, ExpressionMedia } from "../types";
 import type { ExpressionTab } from "./ExpressionPicker";
 import { insertEmojiAtSelection } from "../utils/expressions";
 import { getGiphyMediaUrl } from "../utils/giphy";
@@ -94,7 +98,23 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   const composerInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState<"image" | "file" | null>(null);
+  const [uploading, setUploading] = useState<"image" | "file" | "voice" | null>(null);
+  const [batch, setBatch] = useState<{ done: number; total: number } | null>(null);
+  const [recording, setRecording] = useState<{ seconds: number; ready: boolean } | null>(null);
+  const recorderRef = useRef<VoiceRecorder | null>(null);
+  const finishingVoice = useRef(false);
+  // Leaving the chat (or the page) discards an unfinished recording and releases the microphone.
+  useEffect(() => () => {
+    if (recorderRef.current) { recorderRef.current.cancel(); recorderRef.current = null; setRecording(null); }
+  }, [conversation?.id]);
+  useEffect(() => {
+    if (!recording) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { recorderRef.current?.cancel(); recorderRef.current = null; setRecording(null); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [recording !== null]);
   const activeConversation = useRef(conversation?.id);
   activeConversation.current = conversation?.id;
   const referenceRequest = useRef(0);
@@ -128,6 +148,26 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   const [isActionsMenuOpen, setIsActionsMenuOpen] = useState(false);
   const [isBlocking, setIsBlocking] = useState(false);
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
+  const [reportTarget, setReportTarget] = useState<{ type: ReportTargetType; id: string } | null>(null);
+  const [rateLimitSeconds, setRateLimitSeconds] = useState<number | null>(null);
+
+  useEffect(() => {
+    const onRateLimited = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const retryAfter = detail?.retryAfter || 60;
+      setRateLimitSeconds(retryAfter);
+    };
+    window.addEventListener("api:rate-limited", onRateLimited);
+    return () => window.removeEventListener("api:rate-limited", onRateLimited);
+  }, []);
+
+  useEffect(() => {
+    if (rateLimitSeconds === null || rateLimitSeconds <= 0) return;
+    const timer = setInterval(() => {
+      setRateLimitSeconds((prev) => (prev && prev > 1 ? prev - 1 : null));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [rateLimitSeconds]);
   const onlineUserIds = usePresenceStore((state) => state.onlineUserIds);
   const isTyping = usePresenceStore((state) => conversation ? state.typingByConversation[conversation.id] : false);
   const hasRead = usePresenceStore((state) => conversation ? state.readByConversation[conversation.id] : 0);
@@ -257,30 +297,101 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
     );
   }
 
-  async function handleAttachmentPicked(file: File | undefined, kind: "image" | "file") {
+  async function handleAttachmentsPicked(picked: File[], kind: "image" | "file") {
     if (imageInput.current) imageInput.current.value = "";
     if (fileInput.current) fileInput.current.value = "";
-    if (!file || uploading || isBlocked) return;
-    if (kind === "image" && !isImageType(file.type)) { setActionError("Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP."); return; }
-    if (kind === "file" && !isImageType(file.type) && !isAllowedDocument(file.name)) {
-      setActionError("Chỉ hỗ trợ PDF, Word, Excel, PowerPoint, ZIP và văn bản (TXT, CSV, MD)."); return;
+    if (picked.length === 0 || uploading || isBlocked) return;
+    const { accepted, rejected } = planAttachmentBatch(picked, kind);
+    if (accepted.length === 0) {
+      // Nothing to send: remind the user which formats work.
+      const wrongFormat = rejected.some(r => r.reason.startsWith("định dạng") || r.reason.startsWith("không phải ảnh"));
+      const hint = !wrongFormat ? "" : kind === "image" ? " Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP."
+        : " Chỉ hỗ trợ PDF, Word, Excel, PowerPoint, ZIP và văn bản (TXT, CSV, MD).";
+      setActionError(describeBatchFailures(0, picked.length, rejected) + hint); return;
     }
     const targetConversationId = conversationId;
     const session = getSessionVersion();
-    setActionError(""); setUploading(kind);
+    const failures: RejectedFile[] = [...rejected];
+    let sent = 0; let stopped = "";
+    setActionError(""); setUploading(kind); setBatch({ done: 0, total: accepted.length });
     try {
-      const uploaded = await uploadMedia(file);
+      // One message per file, uploaded in order so they arrive in the order they were chosen.
+      for (const [index, file] of accepted.entries()) {
+        // Never post into a different chat or account if the user switched while uploading.
+        if (session !== getSessionVersion() || useChatStore.getState().activeConversationId !== targetConversationId) return;
+        setBatch({ done: index, total: accepted.length });
+        try {
+          const uploaded = await uploadMedia(file);
+          if (session !== getSessionVersion() || useChatStore.getState().activeConversationId !== targetConversationId) return;
+          // A quoted reply belongs to the first message only.
+          onSendMessage("", { assetId: uploaded.assetId, replyToMessageId: sent === 0 ? reply?.id : undefined, attachmentName: uploaded.fileName || file.name });
+          if (sent === 0) setReply(null);
+          sent++;
+        } catch (error) {
+          if (session !== getSessionVersion()) return;
+          if (axios.isAxiosError(error) && error.response?.status === 429) {
+            const left = accepted.length - index;
+            stopped = `Bạn thao tác quá nhanh nên ${left} mục còn lại chưa được gửi. Hãy đợi một chút rồi gửi lại.`;
+            break;
+          }
+          const fallback = kind === "image" ? "không tải được ảnh" : "không tải được file";
+          failures.push({ name: file.name, reason: extractErrorMessage(error, error instanceof Error && !("isAxiosError" in error) ? error.message : fallback) });
+        }
+      }
+    } finally {
+      setUploading(null); setBatch(null);
+    }
+    if (session === getSessionVersion()) setActionError(describeBatchFailures(sent, picked.length, failures, stopped));
+  }
+
+  async function startRecording() {
+    if (uploading || recording || isBlocked) return;
+    if (!canRecordVoice()) { setActionError("Trình duyệt này chưa hỗ trợ ghi âm."); return; }
+    setActionError("");
+    const recorder = new VoiceRecorder();
+    recorderRef.current = recorder;
+    setRecording({ seconds: 0, ready: false }); // not ready until the browser grants the microphone
+    try {
+      await recorder.start(seconds => {
+        setRecording({ seconds, ready: true });
+        if (seconds >= MAX_VOICE_SECONDS) void finishRecording();
+      });
+      setRecording(current => (current ? { ...current, ready: true } : current));
+      // Cancelled (or the chat changed) while the browser was asking for microphone permission.
+      if (recorderRef.current !== recorder) recorder.cancel();
+    } catch (error) {
+      if (recorderRef.current === recorder) { recorderRef.current = null; setRecording(null); }
+      setActionError(describeVoiceError(error));
+    }
+  }
+
+  function cancelRecording() {
+    recorderRef.current?.cancel();
+    recorderRef.current = null;
+    setRecording(null);
+  }
+
+  async function finishRecording() {
+    const recorder = recorderRef.current;
+    if (!recorder || finishingVoice.current) return;
+    finishingVoice.current = true;
+    const targetConversationId = conversationId;
+    const session = getSessionVersion();
+    try {
+      const result = await recorder.stop();
+      recorderRef.current = null; setRecording(null); setActionError(""); setUploading("voice");
+      const uploaded = await uploadMedia(result.file);
       // Do not post into a different chat or account if the user switched while uploading.
       if (session !== getSessionVersion() || useChatStore.getState().activeConversationId !== targetConversationId) return;
-      onSendMessage("", { assetId: uploaded.assetId, replyToMessageId: reply?.id, attachmentName: uploaded.fileName || file.name });
+      onSendMessage("", { assetId: uploaded.assetId, voiceDuration: result.durationSeconds,
+        waveformPoints: JSON.stringify(result.waveform), replyToMessageId: reply?.id, attachmentName: "Tin nhắn thoại" });
       setReply(null);
     } catch (error) {
-      // uploadMedia rejects oversize files with a plain Error before any request is made.
-      if (session === getSessionVersion()) setActionError(extractErrorMessage(error,
-        error instanceof Error && !("isAxiosError" in error) ? error.message
-          : kind === "image" ? "Không tải được ảnh. Vui lòng thử lại." : "Không tải được file. Vui lòng thử lại."));
+      recorderRef.current = null; setRecording(null);
+      if (session === getSessionVersion()) setActionError(error instanceof VoiceError ? error.message
+        : extractErrorMessage(error, error instanceof Error && !("isAxiosError" in error) ? error.message : "Không gửi được tin nhắn thoại. Vui lòng thử lại."));
     } finally {
-      setUploading(null);
+      finishingVoice.current = false; setUploading(null);
     }
   }
 
@@ -293,6 +404,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
   }
 
   const conversationId = conversation.id;
+  const batchProgress = batch && batch.total > 1 ? ` ${Math.min(batch.done + 1, batch.total)}/${batch.total}` : "";
   const isBlocked = conversation.isBlocked === true || conversation.hasLeft === true || !!conversation.closedAt;
   const isDirectOnline = !isBlocked && conversation.type === "Direct" && (conversation.peerUserId ? onlineUserIds.has(conversation.peerUserId) : conversation.isOnline);
   const isAdmin = conversation.isAdmin === true;
@@ -394,6 +506,11 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
             <div className="chat-window__name">{conversation.name}</div>
             <div className="chat-window__status">
               {conversation.type === "Direct" ? (isDirectOnline ? "Đang hoạt động" : "Không hoạt động") : "Nhóm chat"}
+              {conversation.defaultMessageTtlSeconds ? (
+                <span style={{ marginLeft: 6, fontSize: "0.8rem", color: "var(--color-primary, #3b82f6)", fontWeight: 500 }}>
+                  · ⏱ Tự hủy ({conversation.defaultMessageTtlSeconds < 60 ? `${conversation.defaultMessageTtlSeconds}s` : conversation.defaultMessageTtlSeconds < 3600 ? `${Math.round(conversation.defaultMessageTtlSeconds / 60)}m` : `${Math.round(conversation.defaultMessageTtlSeconds / 3600)}h`})
+                </span>
+              ) : null}
             </div>
           </div>
         </div>
@@ -407,22 +524,37 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
           <button className="icon-btn" title="Gọi video" aria-label="Gọi video" disabled={conversation.type !== "Direct" || isBlocked || callBusy || connectionStatus !== "connected"} onClick={() => void startCall(conversation.id, "Video")}>
             <VideoIcon />
           </button>
-          {conversation.type === "Direct" && conversation.peerUserId && (
-            <div className="chat-window__action-menu">
-              <button type="button" className="icon-btn" title="Tùy chọn" onClick={() => setIsActionsMenuOpen((open) => !open)}>
-                <MoreIcon />
-              </button>
-              {isActionsMenuOpen && (
-                <div className="chat-window__menu" role="menu">
-                  <button type="button" onClick={handleBlockUser} disabled={isBlocking}>
-                    {isBlocking ? "Đang chặn..." : "Chặn người này"}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+          <div className="chat-window__action-menu">
+            <button type="button" className="icon-btn" title="Tùy chọn" onClick={() => setIsActionsMenuOpen((open) => !open)}>
+              <MoreIcon />
+            </button>
+            {isActionsMenuOpen && (
+              <div className="chat-window__menu" role="menu">
+                {conversation.type === "Direct" && conversation.peerUserId && (
+                  <>
+                    <button type="button" onClick={handleBlockUser} disabled={isBlocking}>
+                      {isBlocking ? "Đang chặn..." : "Chặn người này"}
+                    </button>
+                    <button type="button" onClick={() => { setReportTarget({ type: "User", id: conversation.peerUserId! }); setIsActionsMenuOpen(false); }}>
+                      Báo cáo người dùng
+                    </button>
+                  </>
+                )}
+                <button type="button" onClick={() => { setReportTarget({ type: "Conversation", id: conversation.id }); setIsActionsMenuOpen(false); }}>
+                  Báo cáo {conversation.type === "Group" ? "nhóm" : "hội thoại"}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
+
+      {rateLimitSeconds !== null && (
+        <div style={{ margin: "8px 16px", padding: "8px 12px", background: "#fef3c7", color: "#92400e", borderRadius: 6, fontSize: "0.85rem", display: "flex", justifyContent: "space-between", alignItems: "center" }} role="alert">
+          <span>⚠️ Bạn đang thao tác quá nhanh. Vui lòng chờ {rateLimitSeconds}s trước khi tiếp tục.</span>
+          <button type="button" onClick={() => setRateLimitSeconds(null)} style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 700, color: "#92400e" }}>✕</button>
+        </div>
+      )}
 
       {forward && <ForwardMessage message={forward} conversations={conversations} onClose={() => setForward(null)} />}
       {contextMessage && <section className="group-settings" aria-label="Tin nhắn tham chiếu">
@@ -467,19 +599,21 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
               onKeyDown={event => { if (event.target === event.currentTarget && actionable && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setActiveActionId(m.id); } }}
               onContextMenu={(event) => { event.preventDefault(); if (actionable) { setActiveActionId(m.id); if (window.matchMedia("(pointer: fine)").matches) setOpenMessageId(m.id); } }}>
               {m.isForwarded && m.status !== "Deleted" && <small className="message-bubble__forwarded-label">Đã chuyển tiếp</small>}
-              {m.replyPreview && m.status !== "Deleted" && <button className="reply-preview" disabled={!m.replyPreview.isAvailable} onClick={() => {
-                if (m.replyPreview?.isAvailable) void openReference({ ...m, id: m.replyPreview.id, sequence: m.replyPreview.sequence ?? 0 });
-              }}>{m.replyPreview.isAvailable ? `${m.replyPreview.senderName ?? "Người dùng"}: ${m.replyPreview.contentSnippet ?? ""}` : "Tin nhắn gốc không khả dụng"}</button>}
-              {m.status !== "Deleted" && m.attachments?.map(a => <PrivateAttachment key={a.id} messageId={m.id} attachment={a} />)}
-              {(m.status === "Sending" || m.status === "Failed") && m.assetId && !m.attachments?.length &&
-                <small className="message-bubble__pending-media">{m.pendingAttachmentName ? `📎 ${m.pendingAttachmentName}` : "Ảnh"}</small>}
-              {m.status === "Deleted" ? <p className="message-bubble__deleted">Tin nhắn đã được thu hồi</p> : <>
-                {m.expression ? <ExpressionBoundary><Suspense fallback={<span role="status">Đang tải biểu cảm…</span>}><ExpressionMessage media={m.expression} /></Suspense></ExpressionBoundary>
-                  : getGiphyMediaUrl(m.content ?? "") ? <ExpressionBoundary><Suspense fallback={<span>Đang tải GIF…</span>}><ExpressionMessage url={getGiphyMediaUrl(m.content)!} /></Suspense></ExpressionBoundary>
-                  : m.type === "CallLog" ? <CallLogBubble content={m.content} isCaller={isMine} conversationId={conversation.id} disabled={isBlocked || callBusy || connectionStatus !== "connected"} /> : m.content && <p><MessageText content={m.content} mentions={m.mentions} /></p>}
-                {(m.type === "File" || m.type === "Audio") && !m.attachments?.length && <small>Media không khả dụng.</small>}
+              {m.replyPreview && m.status !== "Deleted" && <button className="reply-preview" disabled={!m.replyPreview.isAvailable} onClick={() => {  
+               if (m.replyPreview?.isAvailable) void openReference({ ...m, id: m.replyPreview.id, sequence: m.replyPreview.sequence ?? 0 });
+                }}>{m.replyPreview.isAvailable ? `${m.replyPreview.senderName ?? "Người dùng"}: ${m.replyPreview.contentSnippet ?? ""}` : "Tin nhắn gốc không khả dụng"}</button>}
+                {m.status !== "Deleted" && m.attachments?.map(a => <PrivateAttachment key={a.id} messageId={m.id} attachment={a} voice={{ duration: m.voiceDuration, waveform: m.waveformPoints }} />)}
+                {(m.status === "Sending" || m.status === "Failed") && m.assetId && !m.attachments?.length &&
+                  <small className="message-bubble__pending-media">{m.voiceDuration ? `🎤 Tin nhắn thoại (${formatDuration(m.voiceDuration)})` : m.pendingAttachmentName ? `📎 ${m.pendingAttachmentName}` : "Ảnh"}</small>}
+                {m.status === "Deleted" ? <p className="message-bubble__deleted">Tin nhắn đã được thu hồi</p> :
+                 m.status === "Expired" ? <p className="message-bubble__deleted">⏱ Tin nhắn đã tự hủy</p> : <>
+                  {m.expression ? <ExpressionBoundary><Suspense fallback={<span role="status">Đang tải biểu cảm…</span>}><ExpressionMessage media={m.expression} /></Suspense></ExpressionBoundary>
+                    : getGiphyMediaUrl(m.content ?? "") ? <ExpressionBoundary><Suspense fallback={<span>Đang tải GIF…</span>}><ExpressionMessage url={getGiphyMediaUrl(m.content)!} /></Suspense></ExpressionBoundary>
+                    : m.type === "CallLog" ? <CallLogBubble content={m.content} isCaller={isMine} conversationId={conversation.id} disabled={isBlocked || callBusy || connectionStatus !== "connected"} /> : m.content && <p><MessageText content={m.content} mentions={m.mentions} /></p>}
+                  {(m.type === "File" || m.type === "Audio") && !m.attachments?.length && <small>Media không khả dụng.</small>}
               </>}
               <span className="message-bubble__time">
+                {m.expiresAt && m.status !== "Deleted" && m.status !== "Expired" && <span title="Tin nhắn tự hủy" style={{ marginRight: 4 }}>⏱</span>}
                 {new Date(m.createdAt).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}
                 {m.status === "Sending" && <small role="status">{m.deliveryState === "RetryWaiting" || m.deliveryState === "Queued"
                   ? "Chờ kết nối / chờ gửi…" : m.deliveryState === "Reconciling" ? "Đang kiểm tra tin đã gửi…" : "Đang gửi…"}</small>}
@@ -493,12 +627,13 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
                 <button type="button" className="message-action-btn" aria-label="Chuyển tiếp" title="Chuyển tiếp" onClick={() => { setForward(m); setOpenMessageId(null); setActiveActionId(null); }}><ForwardIcon size={16} /></button>
                 <button type="button" className={`message-action-btn ${pinnedIds.includes(m.id) ? "is-active" : ""}`} aria-pressed={pinnedIds.includes(m.id)} aria-label={pinnedIds.includes(m.id) ? "Bỏ ghim tin nhắn" : "Ghim tin nhắn"} title={pinnedIds.includes(m.id) ? "Bỏ ghim" : "Ghim"}
                   disabled={pinBusy !== null || isBlocked || !(conversation.type === "Direct" || conversation.permissions?.includes("PinMessage"))} onClick={() => void togglePin(m)}><PinIcon size={16} /></button>
-                <button type="button" className="message-action-btn" disabled={!isMine && !canDeleteForEveryone(m)} aria-label="Thêm thao tác" title="Thêm thao tác" aria-expanded={openMessageId === m.id} onClick={() => setOpenMessageId(openMessageId === m.id ? null : m.id)}><MoreIcon size={16} /></button>
+                <button type="button" className="message-action-btn" aria-label="Thêm thao tác" title="Thêm thao tác" aria-expanded={openMessageId === m.id} onClick={() => setOpenMessageId(openMessageId === m.id ? null : m.id)}><MoreIcon size={16} /></button>
               </div>}
-              {actionable && (isMine || canDeleteForEveryone(m)) && openMessageId === m.id && (
+              {actionable && openMessageId === m.id && (
                 <div className="message-menu" role="menu">
                   {isMine && <button type="button" onClick={() => { void onDeleteForMe(m.id).then(() => setOpenMessageId(null)).catch(() => setActionError("Không thể xóa tin nhắn. Vui lòng thử lại.")); }}>Xóa phía tôi</button>}
                   {canDeleteForEveryone(m) && <button type="button" disabled={deletingMessageId === m.id} onClick={() => deleteForEveryone(m)}>Xóa với mọi người</button>}
+                  {!isMine && <button type="button" onClick={() => { setReportTarget({ type: "Message", id: m.id }); setOpenMessageId(null); }}>Báo cáo tin nhắn</button>}
                 </div>
               )}
             </div>
@@ -533,29 +668,43 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
       </Suspense>}
       {isBlocked ? (
         <div className="chat-window__blocked-message">{conversation.type === "Group" ? "Bạn không còn quyền gửi tin trong nhóm này." : "Bạn không thể nhắn tin với người này."}</div>
-      ) : (
+      ) : recording ? (
+        <div className="chat-window__composer voice-recorder" role="group" aria-label="Đang ghi âm tin nhắn thoại">
+          <button type="button" className="icon-btn" aria-label="Hủy ghi âm" title="Hủy ghi âm (Esc)" onClick={cancelRecording}><TrashIcon /></button>
+          <span className="voice-recorder__dot" aria-hidden="true" />
+          <span className="voice-recorder__time" role="timer">{formatDuration(recording.seconds)} / {formatDuration(MAX_VOICE_SECONDS)}</span>
+          <span className="voice-recorder__hint">{recording.ready ? "Đang ghi âm…" : "Đang chờ micro…"}</span>
+          <button type="button" className="icon-btn icon-btn--send" aria-label="Gửi tin nhắn thoại" title="Gửi" disabled={!recording.ready} onClick={() => void finishRecording()}><SendIcon /></button>
+        </div>
+      ) : (     
         <form className="chat-window__composer" onSubmit={handleSubmit}>
           <div className="chat-window__composer-tools">
           <button type="button" data-expression-trigger className={`icon-btn ${pickerTab ? "is-active" : ""}`}
             onPointerDown={rememberComposerSelection}
             title="Emoji, Sticker và GIF" aria-label="Mở bảng biểu cảm" aria-haspopup="dialog" aria-controls="expression-picker" aria-expanded={pickerTab !== null}
             onClick={event => { lastExpressionTrigger.current = event.currentTarget; setPickerTab(current => current ? null : "emoji"); }}><SmileIcon /></button>
-          <input ref={imageInput} type="file" accept={IMAGE_TYPES.join(",")} hidden aria-hidden="true" tabIndex={-1}
-            onChange={e => { void handleAttachmentPicked(e.target.files?.[0], "image"); }} />
-          <input ref={fileInput} type="file" accept={[...DOCUMENT_EXTENSIONS, ...IMAGE_TYPES].join(",")} hidden aria-hidden="true" tabIndex={-1}
-            onChange={e => { void handleAttachmentPicked(e.target.files?.[0], "file"); }} />
-          <button type="button" className="icon-btn" title={uploading === "image" ? "Đang tải ảnh…" : "Gửi ảnh"} aria-label={uploading === "image" ? "Đang tải ảnh" : "Gửi ảnh"}
+          <input ref={imageInput} type="file" multiple accept={IMAGE_TYPES.join(",")} hidden aria-hidden="true" tabIndex={-1}
+            onChange={e => { void handleAttachmentsPicked(Array.from(e.target.files ?? []), "image"); }} />
+          <input ref={fileInput} type="file" multiple accept={[...DOCUMENT_EXTENSIONS, ...IMAGE_TYPES].join(",")} hidden aria-hidden="true" tabIndex={-1}
+            onChange={e => { void handleAttachmentsPicked(Array.from(e.target.files ?? []), "file"); }} />
+          <button type="button" className="icon-btn" title={uploading === "image" ? `Đang tải ảnh${batchProgress}…` : "Gửi ảnh (chọn được nhiều ảnh)"} aria-label={uploading === "image" ? `Đang tải ảnh${batchProgress}` : "Gửi ảnh"}
             aria-busy={uploading === "image"} disabled={uploading !== null} onClick={() => imageInput.current?.click()}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8" cy="8" r="2" /><path d="m3 18 6-6 4 4 3-3 5 5" /></svg>
           </button>
-          <button type="button" className="icon-btn" title={uploading === "file" ? "Đang tải file…" : "Gửi file (PDF, Word, Excel, PowerPoint, ZIP, TXT – tối đa 8 MB)"}
-            aria-label={uploading === "file" ? "Đang tải file" : "Gửi file"}
+          <button type="button" className="icon-btn" title={uploading === "file" ? `Đang tải file${batchProgress}…` : "Gửi file (chọn được nhiều file; PDF, Word, Excel, PowerPoint, ZIP, TXT – tối đa 8 MB mỗi file)"}
+            aria-label={uploading === "file" ? `Đang tải file${batchProgress}` : "Gửi file"}
             aria-busy={uploading === "file"} disabled={uploading !== null} onClick={() => fileInput.current?.click()}>
             <PaperclipIcon />
           </button>
           <button type="button" className="icon-btn gif-button" data-expression-trigger aria-label="Gửi GIF" aria-haspopup="dialog"
             onPointerDown={rememberComposerSelection}
             aria-expanded={pickerTab === "gif"} onClick={event => { lastExpressionTrigger.current = event.currentTarget; setPickerTab(current => current === "gif" ? null : "gif"); }}>GIF</button>
+          <button type="button" className="icon-btn" title={uploading === "voice" ? "Đang gửi tin nhắn thoại…" : "Ghi âm tin nhắn thoại"}
+            aria-label={uploading === "voice" ? "Đang gửi tin nhắn thoại" : "Ghi âm tin nhắn thoại"}
+            aria-busy={uploading === "voice"} disabled={uploading !== null} onClick={() => void startRecording()}>
+            <MicIcon />
+          </button>
+          <button type="button" className="icon-btn" title="Thêm tiện ích (sắp có)" aria-label="Thêm tiện ích (sắp có)" disabled><PlusCircleIcon /></button>
           </div>
           <input ref={composerInput} maxLength={4000} placeholder={`Nhắn tin tới ${conversation.name}`} value={draft}
             onBlur={rememberComposerSelection}
@@ -595,6 +744,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
         {messages.flatMap(m => m.status !== "Deleted" && !deletedIds[m.id] && !hiddenIds[m.id] ? (m.attachments ?? []) : []).slice(0, 6).map(a => <div className="conversation-info__file" key={a.id}><PaperclipIcon /><span>{a.fileName || "Tệp đính kèm"}</span></div>)}
       </section>
     </aside>}
+    {reportTarget && <ReportDialog target={reportTarget} onClose={() => setReportTarget(null)} />}
     </>
   );
 }

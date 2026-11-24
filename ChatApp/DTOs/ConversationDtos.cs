@@ -23,7 +23,8 @@ public record ConversationSummaryResponse(
     int MemberCount = 0,
     long Version = 0,
     DateTime? ClosedAt = null,
-    string? AvatarUrl = null
+    string? AvatarUrl = null,
+    int? DefaultMessageTtlSeconds = null
 );
 
 public record MessageResponse(
@@ -48,6 +49,8 @@ public record MessageResponse(
     string? SenderName = null,
     string? SenderUsername = null,
     ExpressionMedia? Expression = null
+    DateTime? ExpiresAt = null,
+    int? TtlSeconds = null
 );
 
 public record MessageListResponse(
@@ -72,6 +75,7 @@ public record SendMessageRequest(
     string? WaveformPoints = null,
     Guid? AssetId = null,
     ExpressionInput? Expression = null
+    int? TtlSeconds = null
 );
 
 public record SendMessagePayload(
@@ -84,7 +88,10 @@ public record SendMessagePayload(
     string? WaveformPoints = null,
     Guid? AssetId = null,
     ExpressionInput? Expression = null
+    int? TtlSeconds = null
 );
+
+public record SetDisappearingMessagesRequest(int? TtlSeconds);
 
 public record MessageStateResponse(Guid Id, bool Deleted, bool Hidden);
 public record MessageStatesRequest([Required, MaxLength(100)] Guid[] Ids);
