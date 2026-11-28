@@ -351,7 +351,7 @@ public class AuthService : IAuthService
     }
 
     private static UserResponse ToUserResponse(User user) =>
-        new(user.Id, user.Username, user.Email, user.Phone, user.FullName, user.AvatarUrl, user.Bio, user.IsVerified);
+        new(user.Id, user.Username, user.Email, user.Phone, user.FullName, user.AvatarUrl, user.Bio, user.IsVerified, user.Role, user.IsFlagged);
 
     private async Task<string> GenerateUniqueUsernameAsync(string email)
     {

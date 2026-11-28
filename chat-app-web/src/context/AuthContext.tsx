@@ -50,6 +50,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           avatarUrl: userResponse.avatarUrl,
           bio: userResponse.bio,
           isVerified: userResponse.isVerified,
+          role: userResponse.role,
+          isFlagged: userResponse.isFlagged,
         };
 
         setUser(userData);
