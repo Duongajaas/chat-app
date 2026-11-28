@@ -50,8 +50,8 @@ public class MessageReader(AppDbContext db, IMessageEncryptionService? encryptio
                 reply = original == null ? new(replyId, null, null, false) :
                     isExpired ? new(replyId, null, "Tin nhắn gốc đã hết hạn", false) :
                     new(replyId, original.SenderId is Guid sender ? senders.GetValueOrDefault(sender)?.FullName : null,
-                        original.Type == MessageType.CallLog ? "Cuộc gọi" : original.Type == MessageType.Sticker ? "Sticker" : decOriginalContent is { Length: > 80 } text ? text[..80] + "…" : decOriginalContent, true, original.Sequence) :
-                        original.Type == MessageType.Gif ? "GIF từ GIPHY" : original.Content is { Length: > 80 } text ? text[..80] + "…" : original.Content, true, original.Sequence);
+                        original.Type == MessageType.CallLog ? "Cuộc gọi" : original.Type == MessageType.Sticker ? "Sticker" :
+                        original.Type == MessageType.Gif ? "GIF từ GIPHY" : decOriginalContent is { Length: > 80 } text ? text[..80] + "…" : decOriginalContent, true, original.Sequence);
             }
             return MessageService.ToResponse(m, _encryption) with {
                 SenderName = m.SenderId is Guid author ? senders.GetValueOrDefault(author)?.FullName : null,

@@ -48,7 +48,7 @@ public record MessageResponse(
     string Type = "Text",
     string? SenderName = null,
     string? SenderUsername = null,
-    ExpressionMedia? Expression = null
+    ExpressionMedia? Expression = null,
     DateTime? ExpiresAt = null,
     int? TtlSeconds = null
 );
@@ -74,7 +74,7 @@ public record SendMessageRequest(
     int? VoiceDuration = null,
     string? WaveformPoints = null,
     Guid? AssetId = null,
-    ExpressionInput? Expression = null
+    ExpressionInput? Expression = null,
     int? TtlSeconds = null
 );
 
@@ -87,7 +87,7 @@ public record SendMessagePayload(
     int? VoiceDuration = null,
     string? WaveformPoints = null,
     Guid? AssetId = null,
-    ExpressionInput? Expression = null
+    ExpressionInput? Expression = null,
     int? TtlSeconds = null
 );
 
