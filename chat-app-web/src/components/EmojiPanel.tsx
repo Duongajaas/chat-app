@@ -12,10 +12,10 @@ export default function EmojiPanel({ history, onSelect, dark }: {
       <button type="button" aria-pressed={mode === "recent"} onClick={() => setMode("recent")}>Gần đây</button>
       <button type="button" aria-pressed={mode === "frequent"} onClick={() => setMode("frequent")}>Thường dùng</button>
     </div>
-    <EmojiPicker emojiStyle="native" theme={dark ? "dark" : "light"} width="100%" height={310}
+    <EmojiPicker emojiStyle="native" theme={dark ? "dark" : "light"} width="100%" height={340}
       lazyLoadEmojis autoFocusSearch suggestedEmojis={suggested.map(item => item.unified)}
       labels={{ searchPlaceholder: "Tìm emoji…", searchLabel: "Tìm emoji", loading: "Đang tải emoji…", searchResultsNone: "Không tìm thấy emoji" }}
-      previewConfig={{ showPreview: true, defaultCaption: "Chọn emoji để chèn vào tin nhắn" }}
+      previewConfig={{ showPreview: false }}
       categories={[
         { category: Categories.SUGGESTED, name: mode === "recent" ? "Gần đây" : "Thường dùng" },
         { category: Categories.SMILEYS_PEOPLE, name: "Khuôn mặt & con người" },

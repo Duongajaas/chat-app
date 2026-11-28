@@ -507,7 +507,7 @@ export function ChatWindow({ conversation, messages, onSendMessage, onDeleteMess
             <div className="chat-window__status">
               {conversation.type === "Direct" ? (isDirectOnline ? "Đang hoạt động" : "Không hoạt động") : "Nhóm chat"}
               {conversation.defaultMessageTtlSeconds ? (
-                <span style={{ marginLeft: 6, fontSize: "0.8rem", color: "var(--color-primary, #3b82f6)", fontWeight: 500 }}>
+                <span style={{ marginLeft: 6, fontSize: "0.8rem", color: "var(--color-accent)", fontWeight: 500 }}>
                   · ⏱ Tự hủy ({conversation.defaultMessageTtlSeconds < 60 ? `${conversation.defaultMessageTtlSeconds}s` : conversation.defaultMessageTtlSeconds < 3600 ? `${Math.round(conversation.defaultMessageTtlSeconds / 60)}m` : `${Math.round(conversation.defaultMessageTtlSeconds / 3600)}h`})
                 </span>
               ) : null}

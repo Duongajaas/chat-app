@@ -6,7 +6,10 @@ function Brand() {
 }
 
 export function AuthEntryLayout({ children, register = false }: { children: ReactNode; register?: boolean }) {
-  useEffect(() => { document.title = `${register ? "Đăng ký" : "Đăng nhập"} · ChatApp`; }, [register]);
+  useEffect(() => {
+    document.title = `${register ? "Đăng ký" : "Đăng nhập"} · ChatApp`;
+    return () => { document.title = "ChatApp"; };
+  }, [register]);
   return <div className="auth-shell auth-entry">
     <aside className="auth-entry__aside">
       <Brand />
